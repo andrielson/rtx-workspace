@@ -7,7 +7,7 @@ volumes:
   home:
 
 services:
-  main:
+  workspace:
     container_name: workspace
     hostname: rtx-workspace
     init: true
