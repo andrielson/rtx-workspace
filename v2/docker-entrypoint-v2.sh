@@ -124,18 +124,6 @@ setup_ssh_server() {
   mkdir --parents "$HOME/.ssh" "$SSHD_DIR"
   chmod 700 "$HOME/.ssh" "$SSHD_DIR"
 
-  if [ ! -s "$SSHD_DIR/ssh_host_ed25519_key" ]; then
-    rm -f \
-      "$SSHD_DIR/ssh_host_ed25519_key" \
-      "$SSHD_DIR/ssh_host_ed25519_key.pub"
-    ssh-keygen -q -t ed25519 -N "" -f "$SSHD_DIR/ssh_host_ed25519_key"
-  elif [ ! -s "$SSHD_DIR/ssh_host_ed25519_key.pub" ]; then
-    ssh-keygen -y -f "$SSHD_DIR/ssh_host_ed25519_key" > "$SSHD_DIR/ssh_host_ed25519_key.pub"
-  fi
-
-  chmod 600 "$SSHD_DIR/ssh_host_ed25519_key"
-  chmod 644 "$SSHD_DIR/ssh_host_ed25519_key.pub"
-
   if [ -n "${SSH_AUTHORIZED_KEY:-}" ]; then
     authorized_keys_tmp="$(mktemp "$HOME/.ssh/authorized_keys.XXXXXX")"
     printf '%s\n' "$SSH_AUTHORIZED_KEY" > "$authorized_keys_tmp"
@@ -192,7 +180,7 @@ load_env() {
 
 write_bashrc_env
 
-[ -s "$SSHD_DIR/ssh_host_ed25519_key" ] || setup_ssh_server
+setup_ssh_server
 
 load_env
 
