@@ -1,17 +1,19 @@
 # syntax=docker/dockerfile:1
 ARG TARGETARCH
 
-FROM buildpack-deps:26.04 AS base
+FROM scratch AS base
 
 # Docker client for Docker-out-of-Docker: the daemon stays on the host,
 # reached through the socket bind-mounted in docker-compose.yml.
 # ~/.docker/cli-plugins is the user-level plugin directory the Docker CLI
 # searches by default (highest priority), so no extra config is needed.
 
+# Docker
 COPY --link --from=docker:latest \
   /usr/local/bin/docker \
   /home/ubuntu/.local/bin/docker
 
+# Docker plugins
 COPY --link --from=docker:latest \
   /usr/local/libexec/docker/cli-plugins/ \
   /home/ubuntu/.docker/cli-plugins/
@@ -25,12 +27,11 @@ COPY --link \
   sshd_config \
   /home/ubuntu/.local/sshd/sshd_config
 
-RUN chmod --verbose 500 /home/ubuntu/.local/bin/docker-entrypoint && \
-  chmod --verbose 400 /home/ubuntu/.local/sshd/sshd_config
-
 # =============================================================================
 # Install and configure system packages for all runtime stages.
 FROM buildpack-deps:26.04 AS root-install
+
+COPY --from=base --chown=ubuntu:ubuntu /home/ubuntu/ /home/ubuntu/
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -66,9 +67,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     /etc/ssh/ssh_host_ecdsa_key \
     /etc/ssh/ssh_host_ed25519_key && \
   echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu && \
-  chmod 0440 /etc/sudoers.d/ubuntu
-
-COPY --from=base --chown=ubuntu:ubuntu /home/ubuntu/.local /home/ubuntu/.local
+  chmod --verbose 440 /etc/sudoers.d/ubuntu && \
+  chmod --verbose 500 /home/ubuntu/.local/bin/docker-entrypoint && \
+  chmod --verbose 400 /home/ubuntu/.local/sshd/sshd_config
 
 USER ubuntu
 
@@ -82,7 +83,9 @@ ENV PATH="/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:$PATH" \
   UV_COMPILE_BYTECODE=1 \
   UV_MALWARE_CHECK=1 \
   UV_MANAGED_PYTHON=1 \
-  UV_PREVIEW_FEATURES="python-install-default"
+  UV_PREVIEW_FEATURES="python-install-default" \
+  UV_PYTHON="3.14" \
+  UV_TORCH_BACKEND="cu132"
 
 VOLUME /home
 

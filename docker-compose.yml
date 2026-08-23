@@ -9,6 +9,7 @@ volumes:
 services:
   main:
     container_name: workspace
+    init: true
     ipc: host
     deploy:
       resources:

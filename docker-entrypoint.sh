@@ -304,9 +304,6 @@ _log() {
   _log "Installing Python"
   uv python install --default
 
-  _log "Installing docling..."
-  uv tool install docling
-
   _log "Installing graphifyy..."
   uv tool install graphifyy
 
@@ -315,9 +312,6 @@ _log() {
 
   _log "Installing ty..."
   uv tool install ty
-
-  _log "Installing yt-dlp..."
-  uv tool install yt-dlp
 }
 
 install_everything() {
@@ -355,7 +349,7 @@ load_env() {
 
 write_bashrc_env
 
-command -v gh || install_everything
+command -v opencode >/dev/null || install_everything
 
 load_env
 
