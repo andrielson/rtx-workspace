@@ -1,0 +1,34 @@
+# SSH_PORT defaults to 2222 in the entrypoint. Do not add a Port directive here:
+# OpenSSH accumulates Port directives instead of replacing them with -o Port=.
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+HostKey /home/ubuntu/.local/sshd/ssh_host_ed25519_key
+PidFile /home/ubuntu/.local/sshd/sshd.pid
+
+AllowUsers ubuntu
+PermitRootLogin no
+
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+AuthorizedKeysFile /home/ubuntu/.ssh/authorized_keys
+
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM no
+
+StrictModes yes
+HostbasedAuthentication no
+IgnoreRhosts yes
+PermitUserEnvironment no
+
+AllowAgentForwarding yes
+AllowTcpForwarding yes
+AllowStreamLocalForwarding yes
+GatewayPorts no
+X11Forwarding no
+PermitTunnel no
+
+Subsystem sftp internal-sftp
+LogLevel INFO
