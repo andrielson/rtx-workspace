@@ -1,0 +1,300 @@
+#!/bin/bash
+
+# Fail on errors, unset vars, and pipefail for robust startup
+set -euo pipefail
+
+if [ "$(id -un)" != "ubuntu" ]; then
+  echo "This entrypoint must be run as the ubuntu user." >&2
+  exit 1
+fi
+
+cd "$HOME"
+
+INSTALL_GH_VERSION="${INSTALL_GH_VERSION:-2.97.0}"
+INSTALL_GO_VERSION="${INSTALL_GO_VERSION:-1.26.6}"
+
+UNAME_MACHINE="$(uname -m)"
+TARGETARCH="${TARGETARCH:-$(if [ "$UNAME_MACHINE" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi)}"
+
+SSH_AUTHORIZED_KEYS_FILE="$HOME/.ssh/authorized_keys"
+SSHD_DIR="$HOME/.local/sshd"
+SSH_PORT="${SSH_PORT:-2222}"
+
+validate_ssh_port() {
+  case "$SSH_PORT" in
+    ''|*[!0-9]*)
+      echo "SSH_PORT must be an integer between 1024 and 65535." >&2
+      exit 1
+      ;;
+  esac
+
+  if [ "${#SSH_PORT}" -gt 5 ] || [ "$SSH_PORT" -lt 1024 ] || [ "$SSH_PORT" -gt 65535 ]; then
+    echo "SSH_PORT must be an integer between 1024 and 65535." >&2
+    exit 1
+  fi
+
+  export SSH_PORT
+}
+
+setup_github_workspace() {
+  local github_name
+  local github_email
+
+  if [ -z "${GH_TOKEN:-}" ]; then
+    echo "GH_TOKEN is not set. Skipping GitHub workspace setup."
+    return
+  fi
+
+  if declare -F configure_github_credentials >/dev/null; then
+    configure_github_credentials
+  fi
+
+  gh auth status
+  github_name="$(gh api user --jq '.name')"
+  github_email="$(gh api user --jq '.email')"
+
+  if [ -z "${GIT_AUTHOR_NAME:-}" ] || [ -z "${GIT_COMMITTER_NAME:-}" ]; then
+    git config --global user.name "${github_name}"
+  fi
+
+  if [ -z "${GIT_AUTHOR_EMAIL:-}" ] || [ -z "${GIT_COMMITTER_EMAIL:-}" ]; then
+    git config --global user.email "${github_email}"
+  fi
+
+}
+
+setup_ssh_server() {
+  local authorized_keys_tmp
+
+  validate_ssh_port
+
+  mkdir --parents "$HOME/.ssh" "$SSHD_DIR"
+  chmod 700 "$HOME/.ssh" "$SSHD_DIR"
+
+  if [ ! -s "$SSHD_DIR/ssh_host_ed25519_key" ]; then
+    rm -f \
+      "$SSHD_DIR/ssh_host_ed25519_key" \
+      "$SSHD_DIR/ssh_host_ed25519_key.pub"
+    ssh-keygen -q -t ed25519 -N "" -f "$SSHD_DIR/ssh_host_ed25519_key"
+  elif [ ! -s "$SSHD_DIR/ssh_host_ed25519_key.pub" ]; then
+    ssh-keygen -y -f "$SSHD_DIR/ssh_host_ed25519_key" > "$SSHD_DIR/ssh_host_ed25519_key.pub"
+  fi
+
+  chmod 600 "$SSHD_DIR/ssh_host_ed25519_key"
+  chmod 644 "$SSHD_DIR/ssh_host_ed25519_key.pub"
+
+  if [ -n "${SSH_AUTHORIZED_KEY:-}" ]; then
+    authorized_keys_tmp="$(mktemp "$HOME/.ssh/authorized_keys.XXXXXX")"
+    printf '%s\n' "$SSH_AUTHORIZED_KEY" > "$authorized_keys_tmp"
+    chmod 600 "$authorized_keys_tmp"
+
+    if ! ssh-keygen -l -f "$authorized_keys_tmp" >/dev/null; then
+      rm -f "$authorized_keys_tmp"
+      echo "SSH_AUTHORIZED_KEY is not a valid SSH public key." >&2
+      exit 1
+    fi
+
+    mv "$authorized_keys_tmp" "$SSH_AUTHORIZED_KEYS_FILE"
+  elif [ ! -e "$SSH_AUTHORIZED_KEYS_FILE" ]; then
+    install --mode=600 /dev/null "$SSH_AUTHORIZED_KEYS_FILE"
+  fi
+
+  chmod 600 "$SSH_AUTHORIZED_KEYS_FILE"
+
+  /usr/sbin/sshd \
+    -t \
+    -f "$SSHD_DIR/sshd_config" \
+    -o "Port=$SSH_PORT"
+}
+
+start_ssh_server() {
+  validate_ssh_port
+
+  exec /usr/sbin/sshd -D -e -f /home/ubuntu/.local/sshd/sshd_config -o Port=${SSH_PORT}
+}
+
+configure_github_credentials() {
+  git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f'
+  git config --global url."https://github.com/".insteadOf "git@github.com:"
+}
+
+_curl() {
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
+}
+
+_log() {
+  echo "[$(date --iso-8601=seconds)] $*"
+}
+
+00_install_brew() {
+  _log "Installing Homebrew..."
+  _curl https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | NONINTERACTIVE=1 bash
+
+  [ -s "/home/linuxbrew/.linuxbrew/bin/brew" ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
+}
+
+00_install_bun() {
+  _log "Installing Bun..."
+  _curl https://bun.sh/install | BUN_INSTALL=$HOME/.local bash
+}
+
+01_install_claude() {
+  _log "Installing Claude Code..."
+  _curl https://claude.ai/install.sh | bash
+}
+
+00_install_composer() {
+  local expected_checksum
+  local actual_checksum
+
+  _log "Installing Composer..."
+  expected_checksum="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
+  php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+  actual_checksum="$(php -r "echo hash_file('sha384', 'composer-setup.php');")"
+
+  if [ "$expected_checksum" != "$actual_checksum" ]
+  then
+      >&2 echo 'ERROR: Invalid installer checksum'
+      rm composer-setup.php
+      return
+  fi
+
+  php composer-setup.php --install-dir=$HOME/.local/bin --filename=composer
+}
+
+01_install_gh() {
+  _log "Installing GitHub CLI..."
+  mkdir --parents $HOME/.local/gh
+
+  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar -C $HOME/.local/gh --strip-components=1 -xzf -
+  ln -s $HOME/.local/gh/bin/* $HOME/.local/bin/
+}
+
+01_install_yq() {
+  _log "Installing yq..."
+  mkdir --parents "$HOME/.local/yq"
+
+  # Follow the latest upstream release for slim image bootstraps.
+  _curl "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH}.tar.gz" | tar -C "$HOME/.local/yq" -xzf -
+  mv "$HOME/.local/yq/yq_linux_${TARGETARCH}" "$HOME/.local/yq/yq"
+  ln -s "$HOME/.local/yq/yq" "$HOME/.local/bin/yq"
+}
+
+00_install_go() {
+  _curl https://go.dev/dl/go${INSTALL_GO_VERSION}.linux-${TARGETARCH}.tar.gz | tar -C $HOME/.local -xzf -
+  ln -s $HOME/.local/go/bin/* $HOME/.local/bin/
+}
+
+00_install_nvm() {
+  _log "Installing NVM..."
+  _curl https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh | bash
+
+  [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+
+  _log "Installing latest Node.js..."
+  nvm install node
+
+  _log "Installing latest npm..."
+  nvm install-latest-npm
+
+  _log "Installing global npm packages..."
+  npm install --global --allow-scripts=@fission-ai/openspec \
+    corepack@latest \
+    @fission-ai/openspec@latest
+  
+  _log "Installing global package managers..."
+  corepack install --global \
+    pnpm@latest \
+    yarn@latest
+}
+
+01_install_opencode() {
+  _log "Installing OpenCode..."
+  _curl https://opencode.ai/install | bash -s -- --no-modify-path
+}
+
+00_install_rustup() {
+  _log "Installing Rustup..."
+  _curl https://sh.rustup.rs | bash -s -- --no-modify-path --profile complete -y
+}
+
+00_install_sdkman() {
+  _log "Installing SDKMAN..."
+  _curl https://get.sdkman.io | bash
+
+  if [ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]; then
+    set +euo pipefail
+    source "${SDKMAN_DIR}/bin/sdkman-init.sh"
+
+    sdk install java 25.2.4-graalce
+    sdk install gradle
+    sdk install kotlin
+    sdk install maven
+    sdk install quarkus
+    sdk install scala
+    set -euo pipefail
+  fi
+}
+
+00_install_uv() {
+  _log "Installing UV..."
+  _curl https://astral.sh/uv/install.sh | bash
+
+  _log "Installing docling..."
+  uv tool install docling
+
+  _log "Installing graphifyy..."
+  uv tool install graphifyy
+
+  _log "Installing ruff..."
+  uv tool install ruff
+
+  _log "Installing ty..."
+  uv tool install ty
+
+  _log "Installing yt-dlp..."
+  uv tool install yt-dlp
+}
+
+install_everything() {
+  # 00_install_brew
+  00_install_bun
+  00_install_composer
+  00_install_go
+  00_install_nvm
+  00_install_rustup
+  00_install_sdkman
+  00_install_uv
+
+  01_install_claude
+  01_install_gh
+  01_install_opencode
+  01_install_yq
+  setup_ssh_server
+}
+
+load_env() {
+  if [ -z "${HOMEBREW_REPOSITORY:-}" ] && [ -s /home/linuxbrew/.linuxbrew/bin/brew ]; then
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
+  fi
+
+  if [ -z "${NVM_BIN:-}" ] && [ -s "${NVM_DIR}/nvm.sh" ]; then
+    source "${NVM_DIR}/nvm.sh"
+  fi
+
+  if [ -z "${SDKMAN_PLATFORM:-}" ] && [ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]; then
+    set +euo pipefail
+    source "${SDKMAN_DIR}/bin/sdkman-init.sh"
+    set -euo pipefail
+  fi
+}
+
+command -v gh || install_everything
+
+load_env
+
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+else
+  start_ssh_server
+fi

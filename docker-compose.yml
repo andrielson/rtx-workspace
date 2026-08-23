@@ -1,0 +1,36 @@
+networks:
+  default:
+    external: true
+    name: gateway
+
+volumes:
+  home:
+
+services:
+  main:
+    container_name: workspace
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    build: .
+    env_file:
+      - .env.service
+    ports:
+      - target: 2222
+        published: 2222
+        protocol: tcp
+        mode: host
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: volume
+        source: home
+        target: /home
+    user: ubuntu
+    working_dir: /home/ubuntu
