@@ -3,6 +3,19 @@ ARG TARGETARCH
 
 FROM buildpack-deps:26.04 AS base
 
+# Docker client for Docker-out-of-Docker: the daemon stays on the host,
+# reached through the socket bind-mounted in docker-compose.yml.
+# ~/.docker/cli-plugins is the user-level plugin directory the Docker CLI
+# searches by default (highest priority), so no extra config is needed.
+
+COPY --link --from=docker:latest \
+  /usr/local/bin/docker \
+  /home/ubuntu/.local/bin/docker
+
+COPY --link --from=docker:latest \
+  /usr/local/libexec/docker/cli-plugins/ \
+  /home/ubuntu/.docker/cli-plugins/
+
 COPY --link \
   docker-entrypoint.sh \
   /home/ubuntu/.local/bin/docker-entrypoint
@@ -59,7 +72,7 @@ COPY --from=base --chown=ubuntu:ubuntu /home/ubuntu/.local /home/ubuntu/.local
 
 USER ubuntu
 
-ENV PATH="/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/home/ubuntu/.opencode/bin:$PATH" \
+ENV PATH="/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:$PATH" \
   BUN_INSTALL="/home/ubuntu/.local" \
   CARGO_HOME="/home/ubuntu/.cargo" \
   GOBIN="/home/ubuntu/.local/bin" \

@@ -33,4 +33,6 @@ services:
         source: home
         target: /home
     user: ubuntu
+    group_add:
+      - ${DOCKER_GID:-990}
     working_dir: /home/ubuntu
