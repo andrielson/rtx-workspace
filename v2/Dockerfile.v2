@@ -1,0 +1,289 @@
+# syntax=docker/dockerfile:1
+ARG TARGETARCH
+ARG GH_VERSION=2.97.0
+
+# Select the amd64 architecture for architecture-specific assets.
+FROM scratch AS base-amd64
+
+# Select the arm64 architecture for architecture-specific assets.
+FROM scratch AS base-arm64
+
+# some binaries are published under `uname -m` tokens (aarch64 / x86_64), which differ
+# from BuildKit's TARGETARCH (arm64 / amd64). Encode that mapping by selecting a
+# per-arch stage — only the stage matching TARGETARCH is ever built/downloaded.
+FROM base-${TARGETARCH} AS base
+
+ARG GH_VERSION
+ARG TARGETARCH
+
+# brew
+ADD --link --chmod=755 \
+  https://raw.githubusercontent.com/Homebrew/install/master/install.sh \
+  /opt/00-homebrew-install.sh
+
+# Claude Code
+ADD --link --chmod=755 \
+  https://claude.ai/install.sh \
+  /opt/03-claude-code-install.sh
+
+# Composer
+ADD --link --chmod=755 \
+  https://github.com/composer/composer/releases/latest/download/composer.phar \
+  /home/ubuntu/.local/bin/composer
+
+# NVM
+ADD --link --chmod=755 \
+  https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh \
+  /opt/01-nvm-install.sh
+
+# Open Code
+ADD --link --chmod=755 \
+  https://opencode.ai/install \
+  /opt/03-opencode-install.sh
+
+# SDKMAN
+ADD --link --chmod=755 \
+  https://get.sdkman.io \
+  /opt/02-sdkman-install.sh
+
+# gh - GitHub CLI
+ADD --link --unpack \
+  https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz \
+  /home/ubuntu/.local/
+
+# yq - YAML processor
+ADD --link --unpack \
+  https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH}.tar.gz \
+  /home/ubuntu/.local/yq/
+
+# Docker
+COPY --link --from=docker:latest \
+  /usr/local/bin/docker \
+  /usr/local/bin/docker
+
+# Docker plugins
+COPY --link --from=docker:latest \
+  /usr/local/libexec/docker/cli-plugins/ \
+  /usr/local/libexec/docker/cli-plugins/
+
+# uv
+COPY --link --from=ghcr.io/astral-sh/uv:latest \
+  /uv* \
+  /home/ubuntu/.local/bin/
+
+# Go
+COPY --link --from=golang:latest \
+  /usr/local/go \
+  /home/ubuntu/.local/go
+
+# Bun
+COPY --link --from=oven/bun:distroless \
+  /usr/local/bin/bun* \
+  /home/ubuntu/.local/bin/
+
+# Cargo
+COPY --link --from=rust:slim \
+  /usr/local/cargo \
+  /home/ubuntu/.local/cargo
+
+# Rustup
+COPY --link --from=rust:slim \
+  /usr/local/rustup \
+  /home/ubuntu/.local/rustup
+
+# grpcurl
+COPY --link --from=fullstorydev/grpcurl:latest \
+  /bin/grpcurl \
+  /home/ubuntu/.local/bin/
+
+# Docker entrypoint
+COPY --link \
+  docker-entrypoint-v2.sh \
+  /home/ubuntu/.local/bin/docker-entrypoint
+
+# OpenSSH server configuration
+COPY --link \
+  sshd_config \
+  /home/ubuntu/.local/sshd/sshd_config
+
+# =============================================================================
+# Install and configure system packages for all runtime stages.
+FROM buildpack-deps:26.04 AS root-install
+
+COPY --from=base /usr/local/ /usr/local/
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  rm -f /etc/apt/apt.conf.d/docker-clean && \
+  echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
+  apt-get -qqy --fix-missing update && \
+  apt-get -qqy --fix-missing dist-upgrade && \
+  install --directory /etc/ssh && \
+  touch \
+    /etc/ssh/ssh_host_rsa_key \
+    /etc/ssh/ssh_host_ecdsa_key \
+    /etc/ssh/ssh_host_ed25519_key && \
+  apt-get -qqy --fix-missing install --no-install-recommends \
+    brotli \
+    bubblewrap \
+    ffmpeg \
+    htop \
+    jq \
+    lz4 \
+    nano \
+    openssh-server \
+    php-cli \
+    ripgrep \
+    rsync \
+    sudo \
+    systemd-standalone-sysusers \
+    tmux \
+    xz-utils \
+    zip \
+    zstd \
+  && rm -f \
+    /etc/ssh/ssh_host_rsa_key \
+    /etc/ssh/ssh_host_ecdsa_key \
+    /etc/ssh/ssh_host_ed25519_key && \
+  echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu && \
+  chmod --verbose 440 /etc/sudoers.d/ubuntu
+
+ENV PATH="/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:$PATH" \
+  BUN_INSTALL="/home/ubuntu/.local" \
+  CARGO_HOME="/home/ubuntu/.cargo" \
+  GOBIN="/home/ubuntu/.local/bin" \
+  NVM_DIR="/home/ubuntu/.nvm" \
+  RUSTUP_HOME="/home/ubuntu/.rustup" \
+  SDKMAN_DIR="/home/ubuntu/.sdkman" \
+  UV_COMPILE_BYTECODE=1 \
+  UV_MALWARE_CHECK=1 \
+  UV_MANAGED_PYTHON=1 \
+  UV_PREVIEW_FEATURES="python-install-default" \
+  UV_PYTHON="3.14" \
+  UV_TORCH_BACKEND="cu132"
+
+# =============================================================================
+# Bootstrap the non-root user and run the ordered upstream installers.
+FROM root-install AS user-install
+
+COPY --chown=ubuntu:ubuntu --from=base /home/ubuntu/ /home/ubuntu/
+COPY --chown=ubuntu:ubuntu --from=base /opt /opt
+
+RUN chmod --verbose 500 /home/ubuntu/.local/bin/docker-entrypoint && \
+  chmod --verbose 400 /home/ubuntu/.local/sshd/sshd_config
+
+USER ubuntu
+
+WORKDIR /home/ubuntu/.local/bin
+
+RUN git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f' && \
+  git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+  ln --symbolic --verbose ${HOME}/.local/cargo/bin/* ./ && \
+  mv --verbose ${HOME}/.local/gh_* ../gh && \
+  ln --symbolic --verbose ${HOME}/.local/gh/bin/* ./ && \
+  ln --symbolic --verbose ${HOME}/.local/go/bin/* ./ && \
+  mv --verbose ${HOME}/.local/yq/yq_linux_* ../yq/yq && \
+  ln --symbolic --verbose ../yq/yq ./yq
+
+SHELL ["/bin/bash", "-c"]
+
+# ENV NONINTERACTIVE=1
+
+WORKDIR /home/ubuntu
+
+
+# =============================================================================
+# Reserve an empty extension stage for future Homebrew packages.
+FROM user-install AS user-brew-install
+
+SHELL ["/bin/bash", "-c"]
+
+ENV NONINTERACTIVE=1
+
+RUN bash /opt/00-homebrew-install.sh
+
+
+# =============================================================================
+# Install Node.js and global npm tools through NVM.
+FROM user-install AS user-nvm-install
+
+RUN bash /opt/01-nvm-install.sh && \
+  source "${NVM_DIR}/nvm.sh" && \
+  nvm install node && \
+  nvm install-latest-npm && \
+  npm install --global --allow-scripts=@fission-ai/openspec \
+    corepack@latest \
+    @fission-ai/openspec@latest \
+  && corepack install --global \
+    pnpm@latest \
+    yarn@latest
+
+
+# =============================================================================
+# Install JVM tools through SDKMAN.
+FROM user-install AS user-sdk-install
+
+RUN bash /opt/02-sdkman-install.sh && \
+  source "${SDKMAN_DIR}/bin/sdkman-init.sh" && \
+  sdk install java 25.2.4-graalce && \
+  sdk install gradle && \
+  sdk install kotlin && \
+  sdk install maven && \
+  sdk install quarkus && \
+  sdk install scala
+
+
+# =============================================================================
+# Install managed Python and Python tools through uv.
+FROM user-install AS user-uv-install
+
+RUN uv python install --default && \
+  uv tool install graphifyy && \
+  uv tool install ruff && \
+  uv tool install ty
+
+
+# =============================================================================
+# Install Claude Code.
+FROM user-install AS user-claude-install
+
+RUN bash /opt/03-claude-code-install.sh
+
+
+# =============================================================================
+# Install Open Code tools.
+FROM user-install AS user-opencode-install
+
+RUN bash /opt/03-opencode-install.sh --no-modify-path && \
+  ln --symbolic --verbose ${HOME}/.opencode/bin/* ${HOME}/.local/bin/
+
+
+# =============================================================================
+# Consolidate the independently installed user tools into one home directory.
+FROM user-install AS user-final
+
+COPY --from=user-brew-install /home/linuxbrew /home/linuxbrew
+
+COPY --from=user-claude-install /home/ubuntu /tmp/home-ubuntu/claude-install/
+COPY --from=user-nvm-install /home/ubuntu /tmp/home-ubuntu/nvm-install/
+COPY --from=user-opencode-install /home/ubuntu /tmp/home-ubuntu/opencode-install/
+COPY --from=user-sdk-install /home/ubuntu /tmp/home-ubuntu/sdk-install/
+COPY --from=user-uv-install /home/ubuntu /tmp/home-ubuntu/uv-install/
+
+RUN for xyz in /tmp/home-ubuntu/*; do \
+    rsync --archive --ignore-existing --exclude='.bashrc' "$xyz"/ /home/ubuntu/; \
+  done
+
+# =============================================================================
+# Assemble the final non-root runtime image.
+FROM root-install
+
+COPY --from=user-final /home /home
+
+USER ubuntu
+
+VOLUME /home
+
+WORKDIR /home/ubuntu
+
+ENTRYPOINT [ "docker-entrypoint" ]
