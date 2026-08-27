@@ -1,3 +1,5 @@
 *
 !docker-entrypoint.sh
 !sshd_config
+!v2/*.sh
+!v3/*.sh

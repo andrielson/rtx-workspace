@@ -26,7 +26,6 @@ services:
       - target: 2222
         published: 2222
         protocol: tcp
-        mode: host
     volumes:
       - type: bind
         source: /var/run/docker.sock
@@ -38,3 +37,16 @@ services:
     group_add:
       - ${DOCKER_GID:-990}
     working_dir: /home/ubuntu
+  nginx:
+    image: nginx:alpine
+    profiles:
+      - development
+    ports:
+      - target: 80
+        published: 8888
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ./v3
+        target: /usr/share/nginx/html
+        read_only: true
