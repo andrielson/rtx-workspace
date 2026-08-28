@@ -1,5 +1,4 @@
 *
+!01-home-bash-env.sh
 !docker-entrypoint.sh
-!sshd_config
-!v2/*.sh
-!v3/*.sh
+!sshd_config_ubuntu
