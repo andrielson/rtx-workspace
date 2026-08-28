@@ -8,7 +8,24 @@ if [ "$(id -un)" != "root" ]; then
   exit 1
 fi
 
+wait_for_user_install_url() {
+  local url="${USER_INSTALL_URL:-http://nginx/user-install.sh}"
+  local attempt
+
+  # nginx may still be booting when a fresh stack starts both containers;
+  # gate the one-shot install on reachability instead of racing it.
+  for attempt in $(seq 1 60); do
+    curl -fsS -o /dev/null "$url" && return 0
+    echo "Waiting for ${url} (attempt ${attempt}/60)..." >&2
+    sleep 2
+  done
+
+  echo "Timed out waiting for ${url}." >&2
+  return 1
+}
+
 run_user_install() {
+  wait_for_user_install_url
   curl -fsSL "${USER_INSTALL_URL:-http://nginx/user-install.sh}" | gosu ubuntu bash
 }
 

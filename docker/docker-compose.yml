@@ -1,0 +1,46 @@
+# Base compose: the source of truth for the workspace service (everything
+# except GPU reservation), its home volume, and the nginx service every stack
+# needs at first boot (the entrypoint curls http://nginx/user-install.sh until
+# the home volume has been bootstrapped). Consumers — the root Prod overlay
+# and tests/docker-compose.yml — extend these services. This file declares no
+# networks on purpose: each consumer shapes its own default network, and
+# relative paths here (../.env.service, ../web, build context) always resolve
+# against this file's directory.
+services:
+  workspace:
+    hostname: rtx-workspace
+    init: true
+    ipc: host
+    build: .
+    image: rtx-workspace:latest
+    env_file: ../.env.service
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: volume
+        source: home
+        target: /home
+    group_add:
+      - ${DOCKER_GID:-990}
+    working_dir: /home/ubuntu
+    depends_on:
+      nginx:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/user-install.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 5s
+    volumes:
+      - type: bind
+        source: ../web
+        target: /usr/share/nginx/html
+        read_only: true
+
+volumes:
+  home:

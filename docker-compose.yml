@@ -1,17 +1,17 @@
-networks:
-  default:
-    external: true
-    name: gateway
-
-volumes:
-  home:
-
+# Prod overlay: the real, long-running stack. Extends the Base compose
+# (docker/docker-compose.yml) with what only production wants — the GPU
+# reservation, the external gateway network, the stable container name, and
+# the SSH port.
 services:
   workspace:
+    extends:
+      file: docker/docker-compose.yml
+      service: workspace
     container_name: workspace
-    hostname: rtx-workspace
-    init: true
-    ipc: host
+    ports:
+      - target: 22
+        published: 2222
+        protocol: tcp
     deploy:
       resources:
         reservations:
@@ -19,29 +19,16 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    build: .
-    env_file:
-      - .env.service
-    ports:
-      - target: 22
-        published: 2222
-        protocol: tcp
-    volumes:
-      - type: bind
-        source: /var/run/docker.sock
-        target: /var/run/docker.sock
-      - type: volume
-        source: home
-        target: /home
-    group_add:
-      - ${DOCKER_GID:-990}
-    working_dir: /home/ubuntu
+
   nginx:
-    image: nginx:alpine
-    profiles:
-      - development
-    volumes:
-      - type: bind
-        source: ./
-        target: /usr/share/nginx/html
-        read_only: true
+    extends:
+      file: docker/docker-compose.yml
+      service: nginx
+
+volumes:
+  home:
+
+networks:
+  default:
+    external: true
+    name: gateway

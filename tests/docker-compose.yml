@@ -1,0 +1,35 @@
+# Tests stack: a throwaway sibling of the real stack. Extends the Base
+# compose with an isolated identity — its own project name, container name,
+# project-scoped volume, and dummy env — so it runs beside the live project
+# (rtx-workspace) without touching it.
+name: rtx-workspace-tests
+
+services:
+  workspace:
+    extends:
+      file: ../docker/docker-compose.yml
+      service: workspace
+    container_name: workspace-test
+    # extends unions env_file sequences; !override replaces the Base's
+    # ../.env.service so real secrets never reach test containers.
+    env_file: !override
+      - .env.service.test
+    # Healthy only once sshd answers — which happens after the first-boot
+    # bootstrap finishes, so `up --wait` gates on a fully-booted workspace.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/22"]
+      interval: 10s
+      timeout: 5s
+      retries: 110
+      start_period: 60s
+
+  # Extending workspace carries its depends_on: nginx, but extends never
+  # imports the sibling service — every consumer must materialize nginx
+  # itself. No overrides needed: the healthcheck lives in the Base.
+  nginx:
+    extends:
+      file: ../docker/docker-compose.yml
+      service: nginx
+
+volumes:
+  home:
