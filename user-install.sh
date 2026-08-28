@@ -13,7 +13,7 @@ cd "$HOME"
 INSTALL_GH_VERSION="${INSTALL_GH_VERSION:-2.97.0}"
 INSTALL_JAVA_VERSION="${INSTALL_JAVA_VERSION:-25.3.4+1.r25-graalce}"
 
-UNAME_MACHINE="$(uname -m)"
+UNAME_MACHINE="$(uname --machine)"
 TARGETARCH="${TARGETARCH:-$(if [ "$UNAME_MACHINE" = "aarch64" ]; then echo "arm64"; else echo "amd64"; fi)}"
 
 SSH_AUTHORIZED_KEYS_FILE="$HOME/.ssh/authorized_keys"

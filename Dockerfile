@@ -75,7 +75,10 @@ COPY --link \
   /scratch/etc/sshd/
 
 RUN chmod --recursive go-w /scratch/home/ubuntu/ && \
-  chown --recursive ubuntu:ubuntu /scratch/home/ubuntu/
+  chown --recursive ubuntu:ubuntu /scratch/home/ubuntu/ && \
+  chmod --verbose +x \
+    /scratch/etc/profile.d/* \
+    /scratch/usr/local/bin/docker-entrypoint
 
 
 # =============================================================================
