@@ -23,7 +23,7 @@ services:
     env_file:
       - .env.service
     ports:
-      - target: 2222
+      - target: 22
         published: 2222
         protocol: tcp
     volumes:
@@ -33,7 +33,6 @@ services:
       - type: volume
         source: home
         target: /home
-    user: ubuntu
     group_add:
       - ${DOCKER_GID:-990}
     working_dir: /home/ubuntu
@@ -41,12 +40,8 @@ services:
     image: nginx:alpine
     profiles:
       - development
-    ports:
-      - target: 80
-        published: 8888
-        protocol: tcp
     volumes:
       - type: bind
-        source: ./v3
+        source: ./
         target: /usr/share/nginx/html
         read_only: true

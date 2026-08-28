@@ -125,8 +125,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     zip \
     zstd \
   && mkdir --parents --verbose /run/sshd && \
+  usermod --password '*' ubuntu && \
   echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu && \
-  chmod --verbose 440 /etc/sudoers.d/ubuntu
+  chmod --verbose 0440 /etc/sudoers.d/ubuntu
 
 COPY --from=scratch-copy /scratch/ /
 
