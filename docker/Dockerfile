@@ -15,6 +15,8 @@ RUN mkdir --parents --verbose \
 
 FROM docker:latest AS scratch-docker
 
+# ln stays short-flagged: this stage's Alpine/BusyBox ln has no long options
+# (mkdir and mv do).
 RUN mkdir --parents --verbose /scratch-home-ubuntu/.docker /scratch-home-ubuntu/.local/bin && \
   mv --verbose /usr/local/libexec/docker/cli-plugins/ /scratch-home-ubuntu/.docker/cli-plugins/ && \
   cd /scratch-home-ubuntu/.local/bin && \
@@ -101,11 +103,11 @@ ENV PATH="/home/ubuntu/.local/bin:/home/ubuntu/.local/bun/bin:/home/ubuntu/.loca
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt,sharing=locked \
-  rm -f /etc/apt/apt.conf.d/docker-clean && \
+  rm --force /etc/apt/apt.conf.d/docker-clean && \
   echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && \
-  apt-get -qqy --fix-missing update && \
-  apt-get -qqy --fix-missing dist-upgrade && \
-  apt-get -qqy --fix-missing install --no-install-recommends \
+  apt-get --quiet --quiet --yes --fix-missing update && \
+  apt-get --quiet --quiet --yes --fix-missing dist-upgrade && \
+  apt-get --quiet --quiet --yes --fix-missing install --no-install-recommends \
     bash-completion \
     brotli \
     bubblewrap \

@@ -3,7 +3,7 @@
 # Fail on errors, unset vars, and pipefail for robust startup
 set -euo pipefail
 
-if [ "$(id -un)" != "ubuntu" ]; then
+if [ "$(id --user --name)" != "ubuntu" ]; then
   echo "This entrypoint must be run as the ubuntu user." >&2
   exit 1
 fi
@@ -80,7 +80,7 @@ write_bashrc_env() {
       esac
 
       printf 'export %s=%q\n' "$key" "$value"
-    done < <(env -0)
+    done < <(env --null)
   } > "$bash_env"
 
   chmod 600 "$bash_env"
@@ -135,7 +135,7 @@ setup_ssh() {
   _log "Installing GitHub CLI..."
   mkdir --parents $HOME/.local/gh
 
-  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar --directory=$HOME/.local/gh --strip-components=1 -xzf -
+  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar --directory=$HOME/.local/gh --strip-components=1 --extract --gzip --file=-
   ln --verbose --symbolic $HOME/.local/gh/bin/* $HOME/.local/bin/
 }
 
@@ -144,7 +144,7 @@ setup_ssh() {
   mkdir --parents "$HOME/.local/yq"
 
   # Follow the latest upstream release for slim image bootstraps.
-  _curl "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH}.tar.gz" | tar --directory="$HOME/.local/yq" -xzf -
+  _curl "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH}.tar.gz" | tar --directory="$HOME/.local/yq" --extract --gzip --file=-
   mv --verbose "$HOME/.local/yq/yq_linux_${TARGETARCH}" "$HOME/.local/yq/yq"
   ln --verbose --symbolic "$HOME/.local/yq/yq" "$HOME/.local/bin/yq"
 }

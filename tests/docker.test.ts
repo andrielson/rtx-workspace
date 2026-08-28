@@ -12,25 +12,24 @@ const env = {
   DOCKER_GID: String(statSync("/var/run/docker.sock").gid),
 };
 
-// bun:test kills hooks after 5s by default; the stack lifecycle needs far
-// longer (the up waits out the first-boot bootstrap, bounded by
-// --wait-timeout 1800), so every hook carries an explicit timeout.
+// bun:test kills hooks after 5s by default; the --pull build fetches base
+// images over the network and can take far longer, so every hook carries an
+// explicit timeout.
 beforeAll(async () => {
   // Defensive teardown first: the afterAll guarantee does not cover SIGKILL.
-  await $`docker compose -f ${file} -p ${project} down -v --remove-orphans`
+  await $`docker compose --file ${file} --project-name ${project} down --volumes --remove-orphans`
     .env(env)
     .nothrow()
     .quiet();
-  // Not quiet: compose progress echoes live, and a failure throws ShellError
-  // with stderr attached. --wait blocks until the workspace healthcheck
-  // passes (sshd is up, i.e. the first-boot bootstrap has finished).
-  await $`docker compose -f ${file} -p ${project} up -d --wait --wait-timeout 1800`.env(
+  // Not quiet: build progress echoes live, and a failure throws ShellError
+  // with stderr attached.
+  await $`docker compose --file ${file} --project-name ${project} build --pull`.env(
     env,
   );
 }, 1_900_000);
 
 afterAll(async () => {
-  await $`docker compose -f ${file} -p ${project} down -v --remove-orphans`
+  await $`docker compose --file ${file} --project-name ${project} down --volumes --remove-orphans`
     .env(env)
     .nothrow()
     .quiet();
