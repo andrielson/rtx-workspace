@@ -48,6 +48,16 @@ COPY --link --from=tianon/gosu:latest \
   /gosu \
   /scratch/usr/local/bin/gosu
 
+# shellcheck
+COPY --link --from=koalaman/shellcheck:stable \
+  /bin/shellcheck \
+  /scratch/home/ubuntu/.local/bin/shellcheck
+
+# shfmt
+COPY --link --from=mvdan/shfmt:v3 \
+  /bin/shfmt \
+  /scratch/home/ubuntu/.local/bin/shfmt
+
 # Bun
 COPY --link --from=scratch-bun \
   /scratch-home-ubuntu/ \

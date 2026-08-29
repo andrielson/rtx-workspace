@@ -34,7 +34,7 @@ is recorded in [ADR 0001](docs/adr/0001-extends-based-compose-layering.md)):
 `docker/Dockerfile` builds on `buildpack-deps:26.04` and:
 
 - applies `apt-get dist-upgrade` and installs system packages — `openssh-server`, `sudo`, `jq`, `ripgrep`, `ffmpeg`, `tmux`, and others;
-- copies ready-to-run tool trees out of official images into `/home/ubuntu/.local`: Go (from `golang`), rustup/cargo (from `rust`), Bun with its completions (from `oven/bun`), the Docker CLI with the compose plugin (from `docker`), and `gosu`;
+- copies ready-to-run tools out of official images: Go (from `golang`), rustup/cargo (from `rust`), Bun with its completions (from `oven/bun`), and the Docker CLI with the compose plugin (from `docker`) into `/home/ubuntu/.local`, ShellCheck (from `koalaman/shellcheck`) and shfmt (from `mvdan/shfmt`) into `/home/ubuntu/.local/bin`, and `gosu` (from `tianon/gosu`) into `/usr/local/bin`;
 - drops configuration into place: `docker-entrypoint`, the `01-home-bash-env.sh` profile loader, `sshd_config_ubuntu`, and a passwordless-sudoers drop-in for the `ubuntu` user (whose password is locked — access is SSH-key only);
 - declares `VOLUME /home`, runs as `ENTRYPOINT [ "docker-entrypoint" ]`, and starts sshd as the default command.
 

@@ -135,6 +135,29 @@ describe("Dockerfile", () => {
         await execInWorkspace("gosu ubuntu id --user --name", { asRoot: true }),
       ).toBe("ubuntu");
     });
+
+    test("shellcheck reports its version", async () => {
+      // The copy tracks the stable channel, whose version line is a bare
+      // x.y.z; a dev build's v-prefixed git-describe string must not pass.
+      expect(await execInWorkspace("shellcheck --version")).toMatch(
+        /^version: \d+\.\d+(\.\d+)?$/m,
+      );
+    });
+
+    test("shfmt reports its version", async () => {
+      expect(await execInWorkspace("shfmt --version")).toMatch(
+        /^v\d+\.\d+\.\d+$/,
+      );
+    });
+
+    test.each(["shellcheck", "shfmt"])(
+      "%s resolves from the copied location",
+      async (command) => {
+        expect(await execInWorkspace(`command -v ${command}`)).toBe(
+          `/home/ubuntu/.local/bin/${command}`,
+        );
+      },
+    );
   });
 
   describe("environment", () => {
