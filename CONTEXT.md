@@ -23,3 +23,7 @@ _Avoid_: static files, www
 **Bootstrap script**:
 `user-install.sh`, the script a workspace fetches from nginx and runs as the ubuntu user when its home volume is fresh.
 _Avoid_: installer, setup script
+
+**Image contract**:
+The tools, files, and permissions the workspace image delivers on its own, before the Bootstrap script ever runs; the complement of what the first boot installs.
+_Avoid_: Dockerfile contract, base image contents
