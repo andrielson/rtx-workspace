@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { statSync } from "node:fs";
-import { beforeAll, afterAll, test, expect } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 const project = "rtx-workspace-tests";
 const file = "tests/docker-compose.yml";
@@ -38,3 +38,7 @@ afterAll(async () => {
 test("2 + 2", () => {
   expect(2 + 2).toBe(4);
 });
+
+describe("Dockerfile", () => {/*TODO*/});
+
+describe("user-install", () => {/*TODO*/});
