@@ -7,7 +7,7 @@ name: rtx-workspace-tests
 services:
   workspace:
     extends:
-      file: ../docker/docker-compose.yml
+      file: ../src/docker-compose.yml
       service: workspace
     container_name: workspace-test
     # extends unions env_file sequences; !override replaces the Base's
@@ -30,7 +30,7 @@ services:
   # itself. No overrides needed: the healthcheck lives in the Base.
   nginx:
     extends:
-      file: ../docker/docker-compose.yml
+      file: ../src/docker-compose.yml
       service: nginx
 
 volumes:

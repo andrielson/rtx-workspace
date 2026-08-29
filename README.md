@@ -25,21 +25,21 @@ is recorded in [ADR 0001](docs/adr/0001-extends-based-compose-layering.md)):
 
 | File | Role |
 | ---- | ---- |
-| `docker/docker-compose.yml` | **Base compose** — the single source of truth: the `workspace` service, its named `home` volume, and the `nginx` service every stack needs |
+| `src/docker-compose.yml` | **Base compose** — the single source of truth: the `workspace` service, its named `home` volume, and the `nginx` service every stack needs |
 | `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222 |
 | `tests/docker-compose.yml` | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment) so tests run beside a live stack without touching it |
 
 ## The workspace image
 
-`docker/Dockerfile` builds on `buildpack-deps:26.04` and:
+`src/Dockerfile` builds on `buildpack-deps:26.04` and:
 
 - applies `apt-get dist-upgrade` and installs system packages — `openssh-server`, `sudo`, `jq`, `ripgrep`, `ffmpeg`, `tmux`, and others;
 - copies ready-to-run tools out of official images: Go (from `golang`), rustup/cargo (from `rust`), Bun with its completions (from `oven/bun`), and the Docker CLI with the compose plugin (from `docker`) into `/home/ubuntu/.local`, ShellCheck (from `koalaman/shellcheck`) and shfmt (from `mvdan/shfmt`) into `/home/ubuntu/.local/bin`, and `gosu` (from `tianon/gosu`) into `/usr/local/bin`;
 - drops configuration into place: `docker-entrypoint`, the `01-home-bash-env.sh` profile loader, `sshd_config_ubuntu`, and a passwordless-sudoers drop-in for the `ubuntu` user (whose password is locked — access is SSH-key only);
 - declares `VOLUME /home`, runs as `ENTRYPOINT [ "docker-entrypoint" ]`, and starts sshd as the default command.
 
-On first boot `docker/docker-entrypoint.sh` waits until nginx is reachable,
-then pipes `web/user-install.sh` — the **Bootstrap script** — through `gosu`
+On first boot `src/docker-entrypoint.sh` waits until nginx is reachable,
+then pipes `src/user-install.sh` — the **Bootstrap script** — through `gosu`
 as `ubuntu`. It runs only while the home volume is fresh (once OpenCode is
 present, subsequent boots skip straight to sshd). The bootstrap installs the
 user-level toolchain (Homebrew, NVM + Node.js, SDKMAN + JVM toolchains,
@@ -169,8 +169,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 
 ## Repository map
 
-- `docker/` — Dockerfile, entrypoint, profile loader, sshd config, Base compose
-- `web/` — what nginx serves: the Bootstrap script (`user-install.sh`)
+- `src/` — the main source: Dockerfile, entrypoint, profile loader, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
 - `tests/` — the Tests stack and the Bun test suite
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. *Base compose*, *Bootstrap script*, *Image contract*)
 - `docs/adr/` — architecture decision records

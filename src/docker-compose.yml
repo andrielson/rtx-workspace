@@ -4,8 +4,8 @@
 # the home volume has been bootstrapped). Consumers — the root Prod overlay
 # and tests/docker-compose.yml — extend these services. This file declares no
 # networks on purpose: each consumer shapes its own default network, and
-# relative paths here (../.env.service, ../web, build context) always resolve
-# against this file's directory.
+# relative paths here (../.env.service, ./user-install.sh, build context)
+# always resolve against this file's directory.
 services:
   workspace:
     hostname: rtx-workspace
@@ -42,8 +42,8 @@ services:
       start_period: 5s
     volumes:
       - type: bind
-        source: ../web
-        target: /usr/share/nginx/html
+        source: ./user-install.sh
+        target: /usr/share/nginx/html/user-install.sh
         read_only: true
 
 volumes:

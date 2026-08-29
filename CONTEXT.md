@@ -5,7 +5,7 @@ A container-based remote development workspace: one GPU-enabled Linux container 
 ## Language
 
 **Base compose**:
-The compose file under `docker/` that is the single source of truth for the workspace service (everything except GPU reservation), its named home volume, and the nginx service; every stack derives from it by `extends`.
+The compose file under `src/` that is the single source of truth for the workspace service (everything except GPU reservation), its named home volume, and the nginx service; every stack derives from it by `extends`.
 _Avoid_: main compose, source-of-truth compose
 
 **Prod overlay**:
@@ -17,7 +17,7 @@ The compose file under `tests/`; extends the Base compose with a throwaway ident
 _Avoid_: test compose, CI stack
 
 **Web root**:
-The directory (`web/`) of artifacts nginx serves to workspaces; the Bootstrap script is fetched from here.
+The nginx document root (`/usr/share/nginx/html/`) where the Base compose bind-mounts the Bootstrap script and from which workspaces fetch it.
 _Avoid_: static files, www
 
 **Bootstrap script**:
