@@ -149,6 +149,24 @@ The Compose files are validated with `bun run lint:compose`, which runs
 The gitignored env files are declared `required: false`, so validation also
 works on fresh clones.
 
+## Agent tooling
+
+The repository versions ZCode agent tooling alongside the stack itself:
+
+- **DeepWiki MCP** — `.zcode/config.json` declares the `deepwiki` MCP server
+  (`https://mcp.deepwiki.com/mcp`), a free, no-authentication service that
+  answers questions about public GitHub repositories from AI-generated
+  documentation. ZCode auto-connects workspace-scoped servers at session
+  start. Precedence caveat: for a same-named server, user scope
+  (`~/.zcode/cli/config.json`) overrides the workspace, so a personal
+  `deepwiki` entry shadows the project's one and edits to this file stop
+  having effect until the personal entry is removed.
+- **Project skills** — skill content lives in `.agents/skills/`, with
+  `.zcode/skills/` holding one symlink per skill (both versioned). The
+  `deepwiki` skill describes when and how to use the MCP tools. Skills
+  installed from `mattpocock/skills` are tracked in `skills-lock.json`;
+  first-party skills are not.
+
 ## Repository map
 
 - `docker/` — Dockerfile, entrypoint, profile loader, sshd config, Base compose
@@ -157,6 +175,7 @@ works on fresh clones.
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. *Base compose*, *Bootstrap script*, *Image contract*)
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — workflows for coding agents (issue tracker, triage labels, domain docs); start at [AGENTS.md](AGENTS.md)
+- `.zcode/` — ZCode agent tooling: the DeepWiki MCP server config and the project skills (content in `.agents/skills/`, symlinks in `.zcode/skills/`)
 
 ## Conventions
 
