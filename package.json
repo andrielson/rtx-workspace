@@ -1,13 +1,13 @@
 {
   "name": "rtx-workspace",
   "scripts": {
-    "format:sh": "shfmt --write src/docker-entrypoint.sh src/01-home-bash-env.sh src/user-install.sh",
-    "format:sh:check": "shfmt --diff src/docker-entrypoint.sh src/01-home-bash-env.sh src/user-install.sh",
+    "format:sh": "shfmt --write src/*.sh",
+    "format:sh:check": "shfmt --diff src/*.sh",
+    "preinstall": "git config core.hooksPath .githooks",
     "lint": "biome check .",
     "lint:compose": "docker compose --file src/docker-compose.yml config --quiet && docker compose --file docker-compose.yml config --quiet && docker compose --file tests/docker-compose.yml config --quiet",
     "lint:fix": "biome check --write .",
-    "lint:sh": "shellcheck --shell=bash src/docker-entrypoint.sh src/01-home-bash-env.sh src/user-install.sh",
-    "postinstall": "git config core.hooksPath .githooks",
+    "lint:sh": "shellcheck src/*.sh",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

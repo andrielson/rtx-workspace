@@ -3,8 +3,10 @@
 # Fail on errors, unset vars, and pipefail for robust startup
 set -euo pipefail
 
-if [ "$(id --user --name)" != "root" ]; then
-  echo "This entrypoint must be run as root." >&2
+# id's exit status is irrelevant here: the string comparison is the check.
+# shellcheck disable=SC2312
+if [[ "$(id --user --name)" != 'root' ]]; then
+  echo 'This entrypoint must be run as root.' >&2
   exit 1
 fi
 
@@ -15,7 +17,7 @@ wait_for_user_install_url() {
   # nginx may still be booting when a fresh stack starts both containers;
   # gate the one-shot install on reachability instead of racing it.
   for attempt in $(seq 1 60); do
-    curl --fail --silent --show-error --output /dev/null "$url" && return 0
+    curl --fail --silent --show-error --output /dev/null "${url}" && return 0
     echo "Waiting for ${url} (attempt ${attempt}/60)..." >&2
     sleep 2
   done
@@ -30,15 +32,23 @@ run_user_install() {
 }
 
 load_env() {
-  if [ -z "${HOMEBREW_REPOSITORY:-}" ] && [ -s /home/linuxbrew/.linuxbrew/bin/brew ]; then
+  # brew shellenv is evaluated for its side effects; a failure surfaces on the
+  # next brew invocation.
+  # shellcheck disable=SC2312
+  if [[ -z ${HOMEBREW_REPOSITORY:-} ]] && [[ -s /home/linuxbrew/.linuxbrew/bin/brew ]]; then
     eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
   fi
 
-  if [ -z "${NVM_BIN:-}" ] && [ -s "${NVM_DIR}/nvm.sh" ]; then
+  # NVM_DIR comes from the image environment (Dockerfile ENV), never from an
+  # assignment in this script.
+  # shellcheck disable=SC2154
+  if [[ -z ${NVM_BIN:-} ]] && [[ -s "${NVM_DIR}/nvm.sh" ]]; then
     source "${NVM_DIR}/nvm.sh"
   fi
 
-  if [ -z "${SDKMAN_PLATFORM:-}" ] && [ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]; then
+  # SDKMAN_DIR likewise comes from the image environment (Dockerfile ENV).
+  # shellcheck disable=SC2154
+  if [[ -z ${SDKMAN_PLATFORM:-} ]] && [[ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]]; then
     set +euo pipefail
     source "${SDKMAN_DIR}/bin/sdkman-init.sh"
     set -euo pipefail
@@ -47,6 +57,6 @@ load_env() {
 
 load_env
 
-command -v opencode >/dev/null || run_user_install
+command -v opencode > /dev/null || run_user_install
 
 exec "$@"

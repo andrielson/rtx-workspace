@@ -3,3 +3,11 @@ root = true
 [*]
 indent_style = space
 indent_size = 2
+
+# shfmt reads this file as its only configuration source. Any parser or
+# printer flag on the command line makes shfmt ignore the file entirely, so
+# always invoke it flagless (--write/--diff only).
+[*.{sh,bash}]
+simplify = true
+switch_case_indent = true
+space_redirects = true

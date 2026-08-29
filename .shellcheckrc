@@ -1,6 +1,15 @@
 # Repo-wide ShellCheck policy. ShellCheck looks for .shellcheckrc in each
 # script's directory and then up the parent directories.
 #
+# 01-home-bash-env.sh is a sourced environment snippet with no shebang, so the
+# dialect cannot come from one; declare it once here for every script.
+shell=bash
+
+# Every optional rule is on. Warnings that reflect deliberate patterns are
+# silenced inline with documented `# shellcheck disable=` comments instead of
+# being turned off repo-wide.
+enable=add-default-case,avoid-nullary-conditions,check-extra-masked-returns,check-set-e-suppressed,check-unassigned-uppercase,deprecate-which,quote-safe-variables,require-double-brackets,require-variable-braces
+
 # The scripts source per-user tool init files (nvm, SDKMAN, BASH_ENV) whose
 # paths are only known at runtime from the environment, so ShellCheck can
 # never follow them statically.

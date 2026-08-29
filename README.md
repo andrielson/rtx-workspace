@@ -110,8 +110,8 @@ afterwards.
 
 ## Lint, formatting and type checking
 
-Biome lints, formats and organizes imports (configured in `biome.json`,
-2-space indent per `.editorconfig`), and `tsc --noEmit` checks types:
+Biome lints, formats and organizes imports (configured in `biome.json`),
+and `tsc --noEmit` checks types:
 
 ```bash
 bun run lint          # check everything
@@ -133,11 +133,16 @@ Two more hooks keep dependencies fresh, with the same shim + `.ts` layout:
 clone/worktree) changed `bun.lock` or `package.json`, and `post-merge`
 reruns it after every merge or pull.
 
-Shell scripts get the same treatment through ShellCheck and shfmt:
+Shell scripts get the same treatment through ShellCheck and shfmt. Both run
+flagless so their configuration files stay the single source of truth:
+`.shellcheckrc` holds the lint policy (bash dialect, optional rules enabled,
+known-noise codes disabled) and `.editorconfig` holds the formatting policy
+(its `[*.{sh,bash}]` section — any parser/printer CLI flag would make shfmt
+ignore that file entirely):
 
 ```bash
 bun run lint:sh          # ShellCheck over the first-party scripts
-bun run format:sh        # shfmt --write (reads .editorconfig)
+bun run format:sh        # shfmt --write
 bun run format:sh:check  # shfmt --diff, no changes applied
 ```
 
@@ -186,3 +191,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
   ([ADR 0001](docs/adr/0001-extends-based-compose-layering.md)).
 - Biome enforces lint, formatting and import ordering; `tsc --noEmit` checks
   types. A pre-commit hook runs both on every commit.
+- Shell strings prefer single quotes for literals without expansions;
+  double quotes once a string contains a variable or command substitution.
+  shfmt preserves quote style, so this is an authoring convention, not a
+  tool-enforced one.
