@@ -1,4 +1,7 @@
 {
+  // `**/*` skips dot-directories, so the TypeScript git hooks under .husky
+  // must be included explicitly to stay type-checked like the rest of the repo.
+  "include": ["**/*", ".husky/**/*.ts"],
   "compilerOptions": {
     // Environment setup & latest features
     "lib": ["ESNext"],

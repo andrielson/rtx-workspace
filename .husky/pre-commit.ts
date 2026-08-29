@@ -1,7 +1,8 @@
-// Pre-commit hook: lint staged source files with Biome, lint and format-check
-// staged shell files with ShellCheck/shfmt, validate staged Compose YAML,
-// then type check the whole repo.
-// Git runs this because `bun install` sets `core.hooksPath` to `.githooks` (see package.json).
+// Pre-commit hook: run the lint-staged fixers (Biome on the TS family,
+// Prettier on markdown/yaml/shell/Dockerfile), then the blocking gates:
+// ShellCheck on staged shell files, Compose validation when YAML is staged,
+// and the full type check.
+// Husky runs the extensionless shell shim `pre-commit`, which delegates here.
 // To skip it in an emergency: `git commit --no-verify`.
 import { $ } from 'bun'
 
@@ -12,14 +13,15 @@ const stagedFiles = async (...pathspecs: string[]): Promise<string[]> => {
   return listing.split('\n').filter((file) => file.length > 0)
 }
 
-const sourceFiles = await stagedFiles('*.ts', '*.tsx', '*.js', '*.jsx', '*.json', '*.jsonc')
-
-if (sourceFiles.length > 0) {
-  const biome = await $`bunx biome check --no-errors-on-unmatched ${sourceFiles}`.nothrow()
-  if (biome.exitCode !== 0) {
-    console.error("pre-commit: Biome found issues. Run 'bun run lint:fix', then stage the fixes.")
-    process.exit(1)
-  }
+// Fixers first, as a single lint-staged invocation: it applies the fixes and
+// re-stages whatever changed. The blocking verifiers below deliberately stay
+// in this script instead of the lint-staged config, because lint-staged runs
+// glob groups concurrently and a checker racing a writer on the same file is
+// not deterministic.
+const lintStaged = await $`bunx lint-staged`.nothrow()
+if (lintStaged.exitCode !== 0) {
+  console.error('pre-commit: lint-staged found unfixable issues. Fix the reported errors, then try again.')
+  process.exit(1)
 }
 
 const shellFiles = await stagedFiles('*.sh', '*.bash')
@@ -28,12 +30,6 @@ if (shellFiles.length > 0) {
   const shellcheck = await $`shellcheck ${shellFiles}`.nothrow()
   if (shellcheck.exitCode !== 0) {
     console.error("pre-commit: ShellCheck found issues. Run 'bun run lint:sh' for the full report.")
-    process.exit(1)
-  }
-
-  const shfmt = await $`shfmt --diff ${shellFiles}`.nothrow()
-  if (shfmt.exitCode !== 0) {
-    console.error("pre-commit: shfmt found formatting diffs. Run 'bun run format:sh'.")
     process.exit(1)
   }
 }

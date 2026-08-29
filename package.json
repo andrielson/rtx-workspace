@@ -1,18 +1,23 @@
 {
   "name": "rtx-workspace",
   "scripts": {
-    "format:sh": "shfmt --write src/*.sh",
-    "format:sh:check": "shfmt --diff src/*.sh",
-    "preinstall": "git config core.hooksPath .githooks",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "lint": "biome check .",
     "lint:compose": "docker compose --file src/docker-compose.yml config --quiet && docker compose --file docker-compose.yml config --quiet && docker compose --file tests/docker-compose.yml config --quiet",
     "lint:fix": "biome check --write .",
     "lint:sh": "shellcheck src/*.sh",
+    "prepare": "husky",
+    "test": "bun test tests/docker.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.11",
     "@types/bun": "latest",
+    "husky": "9.1.7",
+    "lint-staged": "17.4.1",
+    "prettier": "3.9.6",
+    "prettier-plugin-sh": "0.19.0",
     "typescript": "7.0.2"
   }
 }

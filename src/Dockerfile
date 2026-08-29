@@ -4,91 +4,71 @@ ARG TARGETARCH
 FROM oven/bun:debian AS scratch-bun
 
 RUN mkdir --parents --verbose \
-    /scratch-home-ubuntu/.local/bin \
-    /scratch-home-ubuntu/.local/share/bash-completion/completions \
-  && cd /scratch-home-ubuntu/.local/share/bash-completion/completions && \
-  SHELL=bash bun completions > ./bun.completion.bash && \
-  cd /scratch-home-ubuntu/.local/bin && \
-  mv --verbose /usr/local/bin/bun . && \
-  ln --symbolic --verbose ./bun ./bunx
+  /scratch-home-ubuntu/.local/bin \
+  /scratch-home-ubuntu/.local/share/bash-completion/completions \
+  && cd /scratch-home-ubuntu/.local/share/bash-completion/completions \
+  && SHELL=bash bun completions > ./bun.completion.bash \
+  && cd /scratch-home-ubuntu/.local/bin \
+  && mv --verbose /usr/local/bin/bun . \
+  && ln --symbolic --verbose ./bun ./bunx
 
 
 FROM docker:latest AS scratch-docker
 
 # ln stays short-flagged: this stage's Alpine/BusyBox ln has no long options
 # (mkdir and mv do).
-RUN mkdir --parents --verbose /scratch-home-ubuntu/.docker /scratch-home-ubuntu/.local/bin && \
-  mv --verbose /usr/local/libexec/docker/cli-plugins/ /scratch-home-ubuntu/.docker/cli-plugins/ && \
-  cd /scratch-home-ubuntu/.local/bin && \
-  mv --verbose /usr/local/bin/docker . && \
-  ln -sv ../../.docker/cli-plugins/* .
+RUN mkdir --parents --verbose /scratch-home-ubuntu/.docker /scratch-home-ubuntu/.local/bin \
+  && mv --verbose /usr/local/libexec/docker/cli-plugins/ /scratch-home-ubuntu/.docker/cli-plugins/ \
+  && cd /scratch-home-ubuntu/.local/bin \
+  && mv --verbose /usr/local/bin/docker . \
+  && ln -sv ../../.docker/cli-plugins/* .
 
 
 FROM rust:slim AS scratch-rust
 
-RUN RUSTUP_PREVIOUS_TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}') && \
-  rustup set profile default && \
-  rustup default stable && \
-  rustup toolchain uninstall ${RUSTUP_PREVIOUS_TOOLCHAIN} && \
-  mkdir --parents --verbose /scratch-home-ubuntu/.local && \
-  cd /scratch-home-ubuntu/.local && \
-  mv /usr/local/cargo . && \
-  mv /usr/local/rustup .
+RUN RUSTUP_PREVIOUS_TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}') \
+  && rustup set profile default \
+  && rustup default stable \
+  && rustup toolchain uninstall ${RUSTUP_PREVIOUS_TOOLCHAIN} \
+  && mkdir --parents --verbose /scratch-home-ubuntu/.local \
+  && cd /scratch-home-ubuntu/.local \
+  && mv /usr/local/cargo . \
+  && mv /usr/local/rustup .
 
 
 FROM ubuntu:26.04 AS scratch-copy
 
 # golang
-COPY --link --from=golang:latest \
-  /usr/local/go \
-  /scratch/home/ubuntu/.local/go
+COPY --link --from=golang:latest /usr/local/go /scratch/home/ubuntu/.local/go
 
 # gosu
-COPY --link --from=tianon/gosu:latest \
-  /gosu \
-  /scratch/usr/local/bin/gosu
+COPY --link --from=tianon/gosu:latest /gosu /scratch/usr/local/bin/gosu
 
 # shellcheck
-COPY --link --from=koalaman/shellcheck:stable \
-  /bin/shellcheck \
-  /scratch/home/ubuntu/.local/bin/shellcheck
+COPY --link --from=koalaman/shellcheck:stable /bin/shellcheck /scratch/home/ubuntu/.local/bin/shellcheck
 
 # shfmt
-COPY --link --from=mvdan/shfmt:v3 \
-  /bin/shfmt \
-  /scratch/home/ubuntu/.local/bin/shfmt
+COPY --link --from=mvdan/shfmt:v3 /bin/shfmt /scratch/home/ubuntu/.local/bin/shfmt
 
 # Bun
-COPY --link --from=scratch-bun \
-  /scratch-home-ubuntu/ \
-  /scratch/home/ubuntu/
+COPY --link --from=scratch-bun /scratch-home-ubuntu/ /scratch/home/ubuntu/
 
 # Docker
-COPY --link --from=scratch-docker \
-  /scratch-home-ubuntu/ \
-  /scratch/home/ubuntu/
+COPY --link --from=scratch-docker /scratch-home-ubuntu/ /scratch/home/ubuntu/
 
 # Rust
-COPY --link --from=scratch-rust \
-  /scratch-home-ubuntu/ \
-  /scratch/home/ubuntu/
+COPY --link --from=scratch-rust /scratch-home-ubuntu/ /scratch/home/ubuntu/
 
 # docker-entrypoint
-COPY --link \
-  docker-entrypoint.sh \
-  /scratch/usr/local/bin/docker-entrypoint
+COPY --link docker-entrypoint.sh /scratch/usr/local/bin/docker-entrypoint
 
-COPY --link \
-  01-home-bash-env.sh \
-  /scratch/etc/profile.d/
+COPY --link 01-home-bash-env.sh /scratch/etc/profile.d/
 
-COPY --link \
-  sshd_config_ubuntu \
-  /scratch/etc/sshd/
+COPY --link sshd_config_ubuntu /scratch/etc/sshd/
 
-RUN chmod --recursive go-w /scratch/home/ubuntu/ && \
-  chown --recursive ubuntu:ubuntu /scratch/home/ubuntu/ && \
-  chmod --verbose +x \
+RUN chmod --recursive go-w /scratch/home/ubuntu/ \
+  && chown --recursive ubuntu:ubuntu /scratch/home/ubuntu/ \
+  && chmod --verbose +x \
     /scratch/etc/profile.d/* \
     /scratch/usr/local/bin/docker-entrypoint
 
@@ -145,6 +125,6 @@ COPY --from=scratch-copy /scratch/ /
 
 VOLUME /home
 
-ENTRYPOINT [ "docker-entrypoint" ]
+ENTRYPOINT ["docker-entrypoint"]
 
-CMD [ "/usr/sbin/sshd", "-D", "-e", "-f", "/etc/sshd/sshd_config_ubuntu" ]
+CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/sshd/sshd_config_ubuntu"]
