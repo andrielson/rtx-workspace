@@ -30,6 +30,9 @@ setup_git() {
   local github_name
   local github_email
 
+  # The helper is intentionally single-quoted: git must expand $GH_TOKEN when
+  # it invokes the credential helper, not when this script runs.
+  # shellcheck disable=SC2016
   git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f'
   git config --global url."https://github.com/".insteadOf "git@github.com:"
 
@@ -68,20 +71,20 @@ write_bashrc_env() {
       # Skip vars sshd/bash set themselves, shell bookkeeping, and the
       # entrypoint's own inputs (potentially multi-line).
       case "$key" in
-        ''|HOME|USER|LOGNAME|SHELL|TERM|MAIL|PWD|OLDPWD|SHLVL|_|SSH_AUTHORIZED_KEY)
-          continue
-          ;;
+      '' | HOME | USER | LOGNAME | SHELL | TERM | MAIL | PWD | OLDPWD | SHLVL | _ | SSH_AUTHORIZED_KEY)
+        continue
+        ;;
       esac
 
       case "$value" in
-        '')
-          continue
-          ;;
+      '')
+        continue
+        ;;
       esac
 
       printf 'export %s=%q\n' "$key" "$value"
     done < <(env --null)
-  } > "$bash_env"
+  } >"$bash_env"
 
   chmod 600 "$bash_env"
 }
@@ -94,7 +97,7 @@ setup_ssh() {
 
   if [ -n "${SSH_AUTHORIZED_KEY:-}" ]; then
     authorized_keys_tmp="$(mktemp "$HOME/.ssh/authorized_keys.XXXXXX")"
-    printf '%s\n' "$SSH_AUTHORIZED_KEY" > "$authorized_keys_tmp"
+    printf '%s\n' "$SSH_AUTHORIZED_KEY" >"$authorized_keys_tmp"
     chmod --verbose 600 "$authorized_keys_tmp"
 
     if ! ssh-keygen -l -f "$authorized_keys_tmp" >/dev/null; then
@@ -126,17 +129,33 @@ setup_ssh() {
 00_install_composer() {
   local expected_checksum
   local actual_checksum
+  local installer
 
   _log "Installing Composer..."
-  _curl https://getcomposer.org/installer | php -- --install-dir=$HOME/.local/bin --filename=composer
+
+  # The installer runs only after matching the SHA-384 signature Composer
+  # publishes for automation setups (composer.github.io/installer-signature).
+  expected_checksum="$(_curl https://composer.github.io/installer-signature)"
+  installer="$(mktemp)"
+  _curl https://getcomposer.org/installer --output "$installer"
+  actual_checksum="$(sha384sum "$installer" | awk '{print $1}')"
+
+  if [ "$actual_checksum" != "$expected_checksum" ]; then
+    echo "Composer installer failed checksum verification (expected ${expected_checksum}, got ${actual_checksum})." >&2
+    rm --force "$installer"
+    exit 1
+  fi
+
+  php "$installer" --install-dir="$HOME/.local/bin" --filename=composer
+  rm --force --verbose "$installer"
 }
 
 01_install_gh() {
   _log "Installing GitHub CLI..."
-  mkdir --parents $HOME/.local/gh
+  mkdir --parents "$HOME/.local/gh"
 
-  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar --directory=$HOME/.local/gh --strip-components=1 --extract --gzip --file=-
-  ln --verbose --symbolic $HOME/.local/gh/bin/* $HOME/.local/bin/
+  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar --directory="$HOME/.local/gh" --strip-components=1 --extract --gzip --file=-
+  ln --verbose --symbolic "$HOME"/.local/gh/bin/* "$HOME/.local/bin/"
 }
 
 01_install_yq() {
@@ -166,7 +185,7 @@ setup_ssh() {
     corepack@latest \
     @fission-ai/openspec@latest \
     @mockoon/cli
-  
+
   _log "Installing global package managers..."
   corepack install --global \
     pnpm@latest \
@@ -176,7 +195,7 @@ setup_ssh() {
 01_install_opencode() {
   _log "Installing OpenCode..."
   _curl https://opencode.ai/install | bash -s -- --no-modify-path
-  ln --verbose --symbolic ${HOME}/.opencode/bin/* ${HOME}/.local/bin/
+  ln --verbose --symbolic "$HOME"/.opencode/bin/* "$HOME/.local/bin/"
 }
 
 00_install_sdkman() {
@@ -187,7 +206,7 @@ setup_ssh() {
     set +euo pipefail
     source "${SDKMAN_DIR}/bin/sdkman-init.sh"
 
-    sdk install java ${INSTALL_JAVA_VERSION}
+    sdk install java "$INSTALL_JAVA_VERSION"
     sdk install gradle
     sdk install kotlin
     sdk install maven
@@ -226,7 +245,6 @@ install_everything() {
   01_install_opencode
   01_install_yq
 }
-
 
 write_bashrc_env
 install_everything

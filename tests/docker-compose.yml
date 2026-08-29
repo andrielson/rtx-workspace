@@ -12,8 +12,10 @@ services:
     container_name: workspace-test
     # extends unions env_file sequences; !override replaces the Base's
     # ../.env.service so real secrets never reach test containers.
+    # required: false keeps validation green on fresh clones.
     env_file: !override
-      - .env.service.test
+      - path: .env.service.test
+        required: false
     # Healthy only once sshd answers — which happens after the first-boot
     # bootstrap finishes, so `up --wait` gates on a fully-booted workspace.
     healthcheck:

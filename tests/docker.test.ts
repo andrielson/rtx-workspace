@@ -1,6 +1,6 @@
-import { $ } from "bun";
-import { statSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { statSync } from "node:fs";
+import { $ } from "bun";
 
 const project = "rtx-workspace-tests";
 const file = "tests/docker-compose.yml";
@@ -57,7 +57,7 @@ describe("Dockerfile", () => {
   // would in production.
   const execInWorkspace = async (
     script: string,
-    options: { asRoot: boolean } = { asRoot: false},
+    options: { asRoot: boolean } = { asRoot: false },
   ) =>
     $`docker compose --file ${file} --project-name ${project} exec --user ${options.asRoot ? "root" : "ubuntu"} workspace bash -c ${script}`
       .env(env)
@@ -288,4 +288,6 @@ describe("Dockerfile", () => {
   });
 });
 
-describe("user-install", () => {/*TODO*/});
+describe("user-install", () => {
+  /*TODO*/
+});

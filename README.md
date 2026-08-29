@@ -7,6 +7,17 @@ assets. The image ships the heavy toolchains — Go, Rust, Bun, the Docker CLI �
 while everything user-specific is installed on first boot by a bootstrap
 script, so a fresh home volume becomes a fully equipped environment on its own.
 
+## Prerequisites
+
+- **Docker** with the **Compose** (`docker compose`, 2.24+ for the optional
+  env files) and **Buildx** plugins — the stack, the tests harness and the
+  image builds all go through them, and the Dockerfile's
+  `syntax=docker/dockerfile:1` directive requires BuildKit.
+- **Bun** — runs the test suite and every lint/format/type-check script;
+  `bun install` also activates the pre-commit hook.
+- **ShellCheck** (0.10+) and **shfmt** (3.13+) — lint and formatting for the
+  shell scripts.
+
 ## How the stack is layered
 
 The Compose files are layered through service-level `extends:` (the reasoning
@@ -39,9 +50,9 @@ git against GitHub through `GH_TOKEN`, and installs the public key from
 
 ## Getting started
 
-Requirements: Docker with Compose v2, a Docker socket at
-`/var/run/docker.sock`, and — for the GPU reservation — an NVIDIA GPU with
-the NVIDIA container toolkit configured.
+Besides the tools listed under [Prerequisites](#prerequisites), you need a
+Docker socket at `/var/run/docker.sock` and — for the GPU reservation — an
+NVIDIA GPU with the NVIDIA container toolkit configured.
 
 1. Configure the service environment from the example (gitignored, holds
    secrets):
@@ -50,6 +61,9 @@ the NVIDIA container toolkit configured.
    cp .env.service.example .env.service
    # then fill in SSH_AUTHORIZED_KEY, GH_TOKEN, and the API keys
    ```
+
+   The stack starts even without this file (it is declared `required: false`),
+   but without `SSH_AUTHORIZED_KEY` nobody can SSH into the workspace.
 
 2. Create the external network the Prod overlay attaches to:
 
@@ -94,6 +108,39 @@ afterwards.
 - `describe("user-install")` is a placeholder for future Bootstrap-script
   tests, which will exercise the full first-boot flow through nginx.
 
+## Lint, formatting and type checking
+
+Biome lints, formats and organizes imports (configured in `biome.json`,
+2-space indent per `.editorconfig`), and `tsc --noEmit` checks types:
+
+```bash
+bun run lint          # check everything
+bun run lint:fix      # auto-fix lint and formatting issues
+bun run typecheck     # tsc --noEmit
+```
+
+A pre-commit hook (`.githooks/pre-commit`) runs Biome over the staged
+TS/JS/JSON files, checks staged shell files with ShellCheck and shfmt, and
+runs the full type check. It activates itself: `bun install` points
+`core.hooksPath` at `.githooks`. VS Code is preconfigured (`.vscode/`) to
+format with Biome on save and to organize imports alongside it.
+
+Shell scripts get the same treatment through ShellCheck and shfmt:
+
+```bash
+bun run lint:sh          # ShellCheck over the first-party scripts
+bun run format:sh        # shfmt --write (reads .editorconfig)
+bun run format:sh:check  # shfmt --diff, no changes applied
+```
+
+Both tools are local binaries (see [Prerequisites](#prerequisites)).
+
+The Compose files are validated with `bun run lint:compose`, which runs
+`docker compose config` over all three Compose files — schema and the
+`extends` layering included. The pre-commit hook runs it when YAML is staged.
+The gitignored env files are declared `required: false`, so validation also
+works on fresh clones.
+
 ## Repository map
 
 - `docker/` — Dockerfile, entrypoint, profile loader, sshd config, Base compose
@@ -111,3 +158,5 @@ afterwards.
 - Compose files use the long syntax for volumes and ports.
 - Compose files layer through service-level `extends:`
   ([ADR 0001](docs/adr/0001-extends-based-compose-layering.md)).
+- Biome enforces lint, formatting and import ordering; `tsc --noEmit` checks
+  types. A pre-commit hook runs both on every commit.

@@ -1,5 +1,18 @@
 {
+  "name": "rtx-workspace",
+  "scripts": {
+    "format:sh": "shfmt --write docker/docker-entrypoint.sh docker/01-home-bash-env.sh web/user-install.sh .githooks/pre-commit",
+    "format:sh:check": "shfmt --diff docker/docker-entrypoint.sh docker/01-home-bash-env.sh web/user-install.sh .githooks/pre-commit",
+    "lint": "biome check .",
+    "lint:compose": "docker compose --file docker/docker-compose.yml config --quiet && docker compose --file docker-compose.yml config --quiet && docker compose --file tests/docker-compose.yml config --quiet",
+    "lint:fix": "biome check --write .",
+    "lint:sh": "shellcheck --shell=bash docker/docker-entrypoint.sh docker/01-home-bash-env.sh web/user-install.sh .githooks/pre-commit",
+    "postinstall": "git config core.hooksPath .githooks",
+    "typecheck": "tsc --noEmit"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@biomejs/biome": "2.5.11",
+    "@types/bun": "latest",
+    "typescript": "7.0.2"
   }
 }

@@ -1,0 +1,7 @@
+# Repo-wide ShellCheck policy. ShellCheck looks for .shellcheckrc in each
+# script's directory and then up the parent directories.
+#
+# The scripts source per-user tool init files (nvm, SDKMAN, BASH_ENV) whose
+# paths are only known at runtime from the environment, so ShellCheck can
+# never follow them statically.
+disable=SC1090,SC1091

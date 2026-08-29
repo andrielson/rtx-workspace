@@ -13,7 +13,11 @@ services:
     ipc: host
     build: .
     image: rtx-workspace:latest
-    env_file: ../.env.service
+    # Optional so validation and start-up work on fresh clones without
+    # secrets; the bootstrap script guards every variable it reads.
+    env_file:
+      - path: ../.env.service
+        required: false
     volumes:
       - type: bind
         source: /var/run/docker.sock
