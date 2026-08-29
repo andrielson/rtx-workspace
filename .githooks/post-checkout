@@ -1,0 +1,4 @@
+#!/usr/bin/env bun
+// Git requires the hook at this exact extensionless filename, so the actual
+// implementation lives in post-checkout.ts, where Biome and tsc can see it.
+import "./post-checkout.ts";

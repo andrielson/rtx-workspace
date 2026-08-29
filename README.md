@@ -13,8 +13,8 @@ script, so a fresh home volume becomes a fully equipped environment on its own.
   env files) and **Buildx** plugins — the stack, the tests harness and the
   image builds all go through them, and the Dockerfile's
   `syntax=docker/dockerfile:1` directive requires BuildKit.
-- **Bun** — runs the test suite and every lint/format/type-check script;
-  `bun install` also activates the pre-commit hook.
+- **Bun** — runs the test suite, the pre-commit hook, and every
+  lint/format/type-check script; `bun install` also activates the hook.
 - **ShellCheck** (0.10+) and **shfmt** (3.13+) — lint and formatting for the
   shell scripts.
 
@@ -119,11 +119,19 @@ bun run lint:fix      # auto-fix lint and formatting issues
 bun run typecheck     # tsc --noEmit
 ```
 
-A pre-commit hook (`.githooks/pre-commit`) runs Biome over the staged
-TS/JS/JSON files, checks staged shell files with ShellCheck and shfmt, and
-runs the full type check. It activates itself: `bun install` points
-`core.hooksPath` at `.githooks`. VS Code is preconfigured (`.vscode/`) to
-format with Biome on save and to organize imports alongside it.
+A pre-commit hook runs Biome over the staged TS/JS/JSON files, checks
+staged shell files with ShellCheck and shfmt, and runs the full type check.
+The hook is written in TypeScript and executed by Bun: `.githooks/pre-commit`
+is a two-line shim (git requires that extensionless name) importing the
+implementation in `.githooks/pre-commit.ts`. It activates itself:
+`bun install` points `core.hooksPath` at `.githooks`. VS Code is
+preconfigured (`.vscode/`) to format with Biome on save and to organize
+imports alongside it.
+
+Two more hooks keep dependencies fresh, with the same shim + `.ts` layout:
+`post-checkout` reruns `bun install` when a branch switch (or a fresh
+clone/worktree) changed `bun.lock` or `package.json`, and `post-merge`
+reruns it after every merge or pull.
 
 Shell scripts get the same treatment through ShellCheck and shfmt:
 
