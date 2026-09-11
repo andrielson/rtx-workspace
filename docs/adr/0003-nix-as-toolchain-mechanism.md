@@ -45,3 +45,20 @@ escape hatch, not a surface), and the `/dev/tcp` sshd probe leaves harmless
 branch `prototype/nix-layer-a-spike`, 26/26 checks. Executing the migration is
 the next effort, and the CONTEXT.md terms that move — Image contract, Bootstrap
 script, Web root — change in that effort, not before.
+
+## Amendments
+
+- 2026-09-10, during the migration (#13): Bun and Rust left the default
+  profile and joined the carve-outs through their vendor installers (bun.sh,
+  rustup) — both release faster than a pinned profile tracks, and both
+  self-update (`bun upgrade`, `rustup update`).
+- 2026-09-10: the baked `UV_TORCH_BACKEND` default flipped from `cu132` to
+  `cpu` — the workspace targets a broad audience where a GPU is the
+  exception, not the rule; GPU boots override the env per run.
+- 2026-09-10: `build-essential` joined the apt baseline (compilation-based
+  installs such as `go install` need gcc); `libatomic1` stays present
+  transitively through it.
+- 2026-09-10: the Bootstrap script installs with `nix profile add nixpkgs#…`
+  — `nix profile install` is that command's deprecated alias, and the
+  registry shorthand resolves to nixpkgs-unstable exactly like the explicit
+  flake ref.

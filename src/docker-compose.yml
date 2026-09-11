@@ -1,11 +1,12 @@
 # Base compose: the source of truth for the workspace service (everything
-# except GPU reservation), its home volume, and the nginx service every stack
-# needs at first boot (the entrypoint curls http://nginx/user-install.sh until
-# the home volume has been bootstrapped). Consumers — the root Prod overlay
-# and tests/docker-compose.yml — extend these services. This file declares no
-# networks on purpose: each consumer shapes its own default network, and
-# relative paths here (../.env.service, ./user-install.sh, build context)
-# always resolve against this file's directory.
+# except GPU reservation), its /nix volume (the Nix store plus the ubuntu home
+# under it), and the nginx service every stack needs at first boot (the
+# entrypoint curls http://nginx/user-install.sh until the volume has been
+# bootstrapped). Consumers — the root Prod overlay and tests/docker-compose.yml
+# — extend these services. This file declares no networks on purpose: each
+# consumer shapes its own default network, and relative paths here
+# (../.env.service, ./user-install.sh, build context) always resolve against
+# this file's directory.
 services:
   workspace:
     hostname: rtx-workspace
@@ -23,11 +24,11 @@ services:
         source: /var/run/docker.sock
         target: /var/run/docker.sock
       - type: volume
-        source: home
-        target: /home
+        source: nix
+        target: /nix
     group_add:
       - ${DOCKER_GID:-990}
-    working_dir: /home/ubuntu
+    working_dir: /nix/ubuntu
     depends_on:
       nginx:
         condition: service_healthy
@@ -47,4 +48,4 @@ services:
         read_only: true
 
 volumes:
-  home:
+  nix:

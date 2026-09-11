@@ -12,16 +12,19 @@ fi
 
 cd "${HOME}"
 
-INSTALL_GH_VERSION="${INSTALL_GH_VERSION:-2.97.0}"
-INSTALL_JAVA_VERSION="${INSTALL_JAVA_VERSION:-25.3.4+1.r25-graalce}"
-
-UNAME_MACHINE="$(uname --machine)"
-TARGETARCH="${TARGETARCH:-$(if [[ ${UNAME_MACHINE} == 'aarch64' ]]; then echo 'arm64'; else echo 'amd64'; fi)}"
-
 SSH_AUTHORIZED_KEYS_FILE="${HOME}/.ssh/authorized_keys"
 
 _curl() {
-  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location "$@"
+  # Vendor endpoints fail transiently (one observed outage served ~45 s of
+  # 503s), and a single --fail exit under set -e aborts the whole first
+  # boot. --retry re-fetches on curl's own transient class — 5xx responses,
+  # timeouts, resets, and refused connections (--retry-connrefused) — while
+  # permanent errors such as 404 still fail on the first attempt;
+  # --retry-all-errors would blur that line and is deliberately absent.
+  # Ten retries five seconds apart ride out the observed outage window.
+  # Retrying is side-effect-free: only the fetch side of each
+  # fetch-and-run pipe retries, never the installer it feeds.
+  curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 10 --retry-delay 5 --retry-connrefused "$@"
 }
 
 _log() {
@@ -129,117 +132,80 @@ setup_ssh() {
   chmod --verbose 600 "${SSH_AUTHORIZED_KEYS_FILE}"
 }
 
-00_install_brew() {
-  _log 'Installing Homebrew...'
-  _curl https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | NONINTERACTIVE=1 bash
+install_nix_profile() {
+  _log 'Installing the default Nix profile...'
 
-  # brew shellenv is evaluated for its side effects; a failure surfaces on
-  # the next brew invocation.
-  # shellcheck disable=SC2312
-  [[ -s '/home/linuxbrew/.linuxbrew/bin/brew' ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
+  # One unattended install of every stable toolchain and everyday utility,
+  # all free-licensed so the evaluation stays pure. yq rides under yq-go:
+  # nixpkgs' top-level yq is the Python one. git lands here too — the slim
+  # image bakes none, and setup_git below needs it. curl and wget land for
+  # newer versions than apt carries, the profile bin shadowing apt's copies
+  # once installed (apt's curl stays regardless: the entrypoint fetches this
+  # script before any profile exists). unzip serves the vendor installers
+  # below (bun's unpacks its archive). The profile bin is on PATH from the
+  # image ENV hook, so every command resolves the moment this lands.
+  nix profile add \
+    nixpkgs#bash-completion \
+    nixpkgs#brotli \
+    nixpkgs#bubblewrap \
+    nixpkgs#curl \
+    nixpkgs#docker-client \
+    nixpkgs#ffmpeg \
+    nixpkgs#fnm \
+    nixpkgs#gh \
+    nixpkgs#git \
+    nixpkgs#go \
+    nixpkgs#graalvmPackages.graalvm-ce \
+    nixpkgs#gradle \
+    nixpkgs#htop \
+    nixpkgs#jq \
+    nixpkgs#kotlin \
+    nixpkgs#lz4 \
+    nixpkgs#maven \
+    nixpkgs#nano \
+    nixpkgs#php \
+    nixpkgs#phpPackages.composer \
+    nixpkgs#quarkus \
+    nixpkgs#ripgrep \
+    nixpkgs#rsync \
+    nixpkgs#scala \
+    nixpkgs#shellcheck \
+    nixpkgs#shfmt \
+    nixpkgs#tmux \
+    nixpkgs#unzip \
+    nixpkgs#wget \
+    nixpkgs#yq-go \
+    nixpkgs#zip \
+    nixpkgs#zstd
 }
 
-01_install_claude() {
-  _log 'Installing Claude Code...'
-  _curl https://claude.ai/install.sh | bash
-}
+setup_completions() {
+  _log 'Wiring bash completion into the interactive shell init...'
 
-00_install_composer() {
-  local expected_checksum
-  local actual_checksum
-  local installer
-
-  _log 'Installing Composer...'
-
-  # The installer runs only after matching the SHA-384 signature Composer
-  # publishes for automation setups (composer.github.io/installer-signature).
-  expected_checksum="$(_curl https://composer.github.io/installer-signature)"
-  installer="$(mktemp)"
-  _curl https://getcomposer.org/installer --output "${installer}"
-  actual_checksum="$(sha384sum "${installer}" | awk '{print $1}')"
-
-  if [[ ${actual_checksum} != "${expected_checksum}" ]]; then
-    echo "Composer installer failed checksum verification (expected ${expected_checksum}, got ${actual_checksum})." >&2
-    rm --force "${installer}"
-    exit 1
-  fi
-
-  php "${installer}" --install-dir="${HOME}/.local/bin" --filename=composer
-  rm --force --verbose "${installer}"
-}
-
-01_install_gh() {
-  _log 'Installing GitHub CLI...'
-  mkdir --parents "${HOME}/.local/gh"
-
-  _curl "https://github.com/cli/cli/releases/download/v${INSTALL_GH_VERSION}/gh_${INSTALL_GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar --directory="${HOME}/.local/gh" --strip-components=1 --extract --gzip --file=-
-  ln --verbose --symbolic "${HOME}"/.local/gh/bin/* "${HOME}/.local/bin/"
-}
-
-01_install_yq() {
-  _log 'Installing yq...'
-  mkdir --parents "${HOME}/.local/yq"
-
-  # Follow the latest upstream release for slim image bootstraps.
-  _curl "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_${TARGETARCH}.tar.gz" | tar --directory="${HOME}/.local/yq" --extract --gzip --file=-
-  mv --verbose "${HOME}/.local/yq/yq_linux_${TARGETARCH}" "${HOME}/.local/yq/yq"
-  ln --verbose --symbolic "${HOME}/.local/yq/yq" "${HOME}/.local/bin/yq"
-}
-
-00_install_nvm() {
-  _log 'Installing NVM...'
-  _curl https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh | bash
-
-  # NVM_DIR comes from the image environment (Dockerfile ENV), never from an
-  # assignment in this script.
-  # shellcheck disable=SC2154
-  [[ -s "${NVM_DIR}/nvm.sh" ]] && source "${NVM_DIR}/nvm.sh"
-
-  _log 'Installing latest Node.js...'
-  nvm install node
-
-  _log 'Installing latest npm...'
-  nvm install-latest-npm
-
-  _log 'Installing global npm packages...'
-  npm install --global --allow-scripts=@fission-ai/openspec \
-    corepack@latest \
-    @fission-ai/openspec@latest \
-    @mockoon/cli
-
-  _log 'Installing global package managers...'
-  corepack install --global \
-    pnpm@latest \
-    yarn@latest
-}
-
-01_install_opencode() {
-  _log 'Installing OpenCode...'
-  _curl https://opencode.ai/install | bash -s -- --no-modify-path
-  ln --verbose --symbolic "${HOME}"/.opencode/bin/* "${HOME}/.local/bin/"
-}
-
-00_install_sdkman() {
-  _log 'Installing SDKMAN...'
-  _curl https://get.sdkman.io | bash
-
-  # SDKMAN_DIR likewise comes from the image environment (Dockerfile ENV).
-  # shellcheck disable=SC2154
-  if [[ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]]; then
-    set +euo pipefail
-    source "${SDKMAN_DIR}/bin/sdkman-init.sh"
-
-    sdk install java "${INSTALL_JAVA_VERSION}"
-    sdk install gradle
-    sdk install kotlin
-    sdk install maven
-    sdk install quarkus
-    sdk install scala
-    set -euo pipefail
+  # bash-completion left apt with the other utilities; its core script needs
+  # one source line in the interactive init to activate the completions the
+  # profile carries. The line is single-quoted on purpose: $HOME must expand
+  # when an interactive shell sources ~/.bashrc, not here. The grep guard
+  # keeps a partial-failure re-run from appending the line twice.
+  # shellcheck disable=SC2016
+  if ! grep --quiet --fixed-strings 'share/bash-completion/bash_completion' "${HOME}/.bashrc"; then
+    printf '%s\n' 'source "${HOME}/.nix-profile/share/bash-completion/bash_completion"' >> "${HOME}/.bashrc"
   fi
 }
 
-00_install_uv() {
+install_bun() {
+  _log 'Installing Bun...'
+  _curl https://bun.sh/install | bash
+}
+
+install_rustup() {
+  _log 'Installing Rustup...'
+  # bash has no long option for -s (read the installer from stdin), and
+  # rustup-init has no long form for -y (unattended install).
+  _curl https://sh.rustup.rs | bash -s -- --no-modify-path --profile default -y
+}
+
+install_uv() {
   _log 'Installing UV...'
   _curl https://astral.sh/uv/install.sh | bash
 
@@ -256,17 +222,51 @@ setup_ssh() {
   uv tool install ty
 }
 
-install_everything() {
-  00_install_brew
-  00_install_composer
-  00_install_nvm
-  00_install_sdkman
-  00_install_uv
+install_claude_code() {
+  _log 'Installing Claude Code...'
+  _curl https://claude.ai/install.sh | bash
+}
 
-  01_install_claude
-  01_install_gh
-  01_install_opencode
-  01_install_yq
+install_opencode() {
+  _log 'Installing OpenCode...'
+  # bash has no long option for -s (read the installer from stdin).
+  _curl https://opencode.ai/install | bash -s -- --no-modify-path
+  ln --verbose --symbolic "${HOME}"/.opencode/bin/* "${HOME}/.local/bin/"
+}
+
+setup_node() {
+  _log 'Wiring fnm into the interactive shell init...'
+
+  # Interactive-only, as nvm was: Node resolves just for interactive shells.
+  # The eval is single-quoted on purpose: $(fnm env) must run when an
+  # interactive shell sources ~/.bashrc, not here. The grep guard keeps a
+  # partial-failure re-run from appending the line twice.
+  # shellcheck disable=SC2016
+  if ! grep --quiet --fixed-strings 'fnm env --shell bash' "${HOME}/.bashrc"; then
+    printf '%s\n' 'eval "$(fnm env --shell bash)"' >> "${HOME}/.bashrc"
+  fi
+
+  _log 'Installing Node.js LTS via fnm...'
+  fnm install --lts
+  fnm default lts-latest
+
+  # Smoke-test the default Node the same way the .bashrc snippet loads it.
+  # fnm env is evaluated for its side effects; a failure surfaces on the
+  # next fnm invocation.
+  # shellcheck disable=SC2312
+  eval "$(fnm env --shell bash)"
+  node --version
+}
+
+install_everything() {
+  install_nix_profile
+  setup_completions
+  install_bun
+  install_rustup
+  install_uv
+  install_claude_code
+  install_opencode
+  setup_node
 }
 
 write_bashrc_env

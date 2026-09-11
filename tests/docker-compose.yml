@@ -16,6 +16,19 @@ services:
     env_file: !override
       - path: .env.service.test
         required: false
+    # The test suite's SSH harness: compose interpolates the public half of a
+    # throwaway generated key from the invoking process's environment (it
+    # wins over the dummy env_file), and the Bootstrap script's setup_ssh
+    # wires it into authorized_keys on first boot.
+    environment:
+      SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
+    # The matching throwaway SSH surface: loopback-only, random host port
+    # (resolved by the suite through `docker compose port`), gone with the
+    # container when the stack comes down.
+    ports:
+      - target: 22
+        host_ip: 127.0.0.1
+        protocol: tcp
     # Healthy only once sshd answers — which happens after the first-boot
     # bootstrap finishes, so `up --wait` gates on a fully-booted workspace.
     healthcheck:
@@ -34,4 +47,4 @@ services:
       service: nginx
 
 volumes:
-  home:
+  nix:

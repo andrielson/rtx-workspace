@@ -17,7 +17,7 @@ wait_for_user_install_url() {
   # nginx may still be booting when a fresh stack starts both containers;
   # gate the one-shot install on reachability instead of racing it.
   for attempt in $(seq 1 60); do
-    curl --fail --silent --show-error --output /dev/null "${url}" && return 0
+    curl --fail --head --silent --show-error --output /dev/null "${url}" && return 0
     echo "Waiting for ${url} (attempt ${attempt}/60)..." >&2
     sleep 2
   done
@@ -30,32 +30,6 @@ run_user_install() {
   wait_for_user_install_url
   curl --fail --silent --show-error --location "${USER_INSTALL_URL:-http://nginx/user-install.sh}" | gosu ubuntu bash
 }
-
-load_env() {
-  # brew shellenv is evaluated for its side effects; a failure surfaces on the
-  # next brew invocation.
-  # shellcheck disable=SC2312
-  if [[ -z ${HOMEBREW_REPOSITORY:-} ]] && [[ -s /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
-  fi
-
-  # NVM_DIR comes from the image environment (Dockerfile ENV), never from an
-  # assignment in this script.
-  # shellcheck disable=SC2154
-  if [[ -z ${NVM_BIN:-} ]] && [[ -s "${NVM_DIR}/nvm.sh" ]]; then
-    source "${NVM_DIR}/nvm.sh"
-  fi
-
-  # SDKMAN_DIR likewise comes from the image environment (Dockerfile ENV).
-  # shellcheck disable=SC2154
-  if [[ -z ${SDKMAN_PLATFORM:-} ]] && [[ -s "${SDKMAN_DIR}/bin/sdkman-init.sh" ]]; then
-    set +euo pipefail
-    source "${SDKMAN_DIR}/bin/sdkman-init.sh"
-    set -euo pipefail
-  fi
-}
-
-load_env
 
 command -v opencode > /dev/null || run_user_install
 

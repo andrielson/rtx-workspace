@@ -26,7 +26,7 @@ services:
       service: nginx
 
 volumes:
-  home:
+  nix:
 
 networks:
   default:

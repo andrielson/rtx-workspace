@@ -3,9 +3,10 @@
 A GPU-capable remote development workspace delivered as a Docker Compose
 stack: one Linux container you SSH into for day-to-day work (the
 **workspace**), plus an **nginx** sidecar that serves the first-boot install
-assets. The image ships the heavy toolchains — Go, Rust, Bun, the Docker CLI —
-while everything user-specific is installed on first boot by a bootstrap
-script, so a fresh home volume becomes a fully equipped environment on its own.
+assets. The image bakes Nix — the package manager — and nothing else
+tool-wise: every toolchain and everyday utility arrives on first boot when the
+Bootstrap script installs the default Nix profile, so a fresh `/nix` volume
+becomes a fully equipped environment on its own.
 
 ## Prerequisites
 
@@ -17,36 +18,78 @@ script, so a fresh home volume becomes a fully equipped environment on its own.
   lint/format/type-check script; `bun install` also activates the hooks.
 - **ShellCheck** (0.10+) — shell linting. Shell _formatting_ needs no host
   binary: it goes through Prettier and `prettier-plugin-sh`.
+- **openssh-client** — the test suite's real-SSH assertions (`ssh` and
+  `ssh-keygen`) log into the Tests stack through a throwaway generated key
+  and a random loopback port.
+- **openssl** (1.1.1+) and **curl** — the Bootstrap script's unit tests
+  stand up a loopback HTTPS stand-in for a vendor endpoint (throwaway
+  self-signed certificate) and drive the real curl wrapper against it.
 
 ## How the stack is layered
 
 The Compose files are layered through service-level `extends:` (the reasoning
 is recorded in [ADR 0001](docs/adr/0001-extends-based-compose-layering.md)):
 
-| File                        | Role                                                                                                                                                                                    |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/docker-compose.yml`    | **Base compose** — the single source of truth: the `workspace` service, its named `home` volume, and the `nginx` service every stack needs                                              |
-| `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222 |
-| `tests/docker-compose.yml`  | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment) so tests run beside a live stack without touching it             |
+| File                        | Role                                                                                                                                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/docker-compose.yml`    | **Base compose** — the single source of truth: the `workspace` service, its named `nix` volume, and the `nginx` service every stack needs                                                       |
+| `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222         |
+| `tests/docker-compose.yml`  | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment, throwaway SSH port) so tests run beside a live stack without touching it |
 
 ## The workspace image
 
-`src/Dockerfile` builds on `buildpack-deps:26.04` and:
+`src/Dockerfile` builds on `ubuntu:26.04` with a slim runtime baseline and
+Nix itself as the only tool-side content (the reasoning is recorded in
+[ADR 0003](docs/adr/0003-nix-as-toolchain-mechanism.md)):
 
-- applies `apt-get dist-upgrade` and installs system packages — `openssh-server`, `sudo`, `jq`, `ripgrep`, `ffmpeg`, `tmux`, and others;
-- copies ready-to-run tools out of official images: Go (from `golang`), rustup/cargo (from `rust`), Bun with its completions (from `oven/bun`), and the Docker CLI with the compose plugin (from `docker`) into `/home/ubuntu/.local`, ShellCheck (from `koalaman/shellcheck`) and shfmt (from `mvdan/shfmt`) into `/home/ubuntu/.local/bin`, and `gosu` (from `tianon/gosu`) into `/usr/local/bin`;
-- drops configuration into place: `docker-entrypoint`, the `01-home-bash-env.sh` profile loader, `sshd_config_ubuntu`, and a passwordless-sudoers drop-in for the `ubuntu` user (whose password is locked — access is SSH-key only);
-- declares `VOLUME /home`, runs as `ENTRYPOINT ["docker-entrypoint"]`, and starts sshd as the default command.
+- applies `apt-get dist-upgrade` and installs only what the container itself
+  needs — `openssh-server`, `curl` (the entrypoint fetches the Bootstrap
+  script from the Web root before any profile exists), `ca-certificates`,
+  `systemd-standalone-sysusers`, `xz-utils` (the Nix tarball is xz-compressed
+  and extracted during the build), and `build-essential` — compilation-based
+  installs such as `go install` need gcc, and `libatomic1` rides along
+  transitively through it (vendor binaries still link it; Nix binaries are
+  self-contained via store RPATHs);
+- installs Nix from the pinned official release tarball (2.35.2),
+  single-user as `ubuntu` — no channel, no daemon, flakes enabled,
+  `sandbox = false` — with the home moved to `/nix/ubuntu` so a single
+  `/nix` volume persists store, profiles and user state across container
+  recreation;
+- wires three PATH hooks for the Nix profile: the image `ENV` (the only hook
+  a bare `docker exec` sees), `/etc/profile.d/02-home-nix-profile.sh` for SSH
+  login shells, and a guarded `$HOME`-relative export above the interactive
+  guard in `~/.bashrc` for `ssh host <cmd>` — non-ubuntu logins stay
+  harmless;
+- copies `gosu` (from `tianon/gosu`) into `/usr/local/bin` and drops
+  configuration into place: `docker-entrypoint`, the
+  `01-home-bash-env.sh` profile loader and `sshd_config_ubuntu`. The
+  `ubuntu` user's password is locked — access is SSH-key only — and there is
+  no sudo anywhere in the image;
+- declares `VOLUME /nix`, runs as `ENTRYPOINT ["docker-entrypoint"]`, and
+  starts sshd as the default command.
 
 On first boot `src/docker-entrypoint.sh` waits until nginx is reachable,
 then pipes `src/user-install.sh` — the **Bootstrap script** — through `gosu`
-as `ubuntu`. It runs only while the home volume is fresh (once OpenCode is
-present, subsequent boots skip straight to sshd). The bootstrap installs the
-user-level toolchain (Homebrew, NVM + Node.js, SDKMAN + JVM toolchains,
-uv + Python, GitHub CLI, yq, Composer, Claude Code, OpenCode, ...), writes
+as `ubuntu`. It runs only while the volume is fresh (once OpenCode is
+present, subsequent boots skip straight to sshd). The bootstrap writes
 `~/.bash_env` so SSH sessions inherit the container environment, configures
 git against GitHub through `GH_TOKEN`, and installs the public key from
-`SSH_AUTHORIZED_KEY`.
+`SSH_AUTHORIZED_KEY`. Its install half is one unattended `nix profile add` of
+`nixpkgs#` packages (the flake-registry shorthand resolves to
+nixpkgs-unstable): the **default profile** carries SDKMAN's set with GraalVM
+CE (Gradle, Kotlin, Maven, Quarkus, Scala), Go, PHP + Composer, gh, git, yq
+(under the nixpkgs attr `yq-go`), shellcheck, shfmt, the docker CLI (compose
+plugin included), fnm, and the everyday utilities — all free-licensed, so
+the install evaluates pure. Five **carve-outs** stay outside the read-only
+store: uv through its official installer (the `UV_*` knobs are baked into
+the image, with `UV_TORCH_BACKEND=cpu` as the default — CPU torch wheels
+suit the common GPU-less case; override the env for CUDA), the
+self-updating agent CLIs Claude Code and OpenCode through their vendor
+scripts (they rewrite their own binary), and Node via fnm — `fnm install
+--lts` with `lts-latest` as the default, wired interactive-only into
+`~/.bashrc` as nvm was. Bun and Rust round out the carve-outs through their
+vendor installers (bun.sh, rustup): both release faster than a pinned
+profile tracks, and both self-update (`bun upgrade`, `rustup update`).
 
 ## Getting started
 
@@ -87,26 +130,60 @@ NVIDIA GPU with the NVIDIA container toolkit configured.
 
 ## Testing
 
-The suite is a Bun test file that drives the Docker CLI through Bun Shell:
+The suite is two Bun test files driven through Bun Shell:
 
 ```bash
-bun run test # wraps: bun test tests/docker.test.ts
+bun run test # wraps: bun test tests/
 ```
 
-It needs only a running Docker daemon and `/var/run/docker.sock` — the
-socket's GID is injected into the Tests compose so the container can reach
-the host daemon. Global hooks build the image through the Tests stack
-(`build --pull`, so expect a slow first run) and tear the whole project down
-afterwards.
+The Docker file (`tests/docker.test.ts`) needs a running Docker daemon,
+`/var/run/docker.sock` (its GID is injected into the Tests stack so the
+container can reach the host daemon) and `openssh-client` on the test host
+(see [Prerequisites](#prerequisites)). Global hooks build the image through
+the Tests stack (`build --pull`, so expect a slow first run) and tear the
+whole project down afterwards.
 
 - `describe("Dockerfile")` verifies the **Image contract**: what the image
   alone delivers before the Bootstrap script ever runs. A one-off workspace
   container (entrypoint replaced by `sleep infinity`, dependencies skipped)
-  is probed with `docker compose exec` as the `ubuntu` user across six
-  groups — copied tools, environment, copied files and permissions,
-  privileges, image config, and system packages.
-- `describe("user-install")` is a placeholder for future Bootstrap-script
-  tests, which will exercise the full first-boot flow through nginx.
+  is probed with `docker compose exec` as the `ubuntu` user (plus one bare
+  `docker exec` for the image-ENV PATH hook) across eight groups — nix,
+  retired toolchains and managers, environment, PATH hooks, files and
+  permissions, privileges, image config, and system packages.
+- `describe("user-install")` (in `tests/docker.test.ts`) exercises the full
+  first-boot flow through nginx: the Tests stack's `up --wait` gates on the
+  sshd healthcheck (which by construction only turns healthy after
+  provisioning finishes), then bare-exec assertions run every
+  default-profile tool, the carve-outs coexist (uv, Claude Code, OpenCode,
+  Bun and Rust via their vendor installers; fnm/Node in an interactive
+  shell), the retired managers leave no
+  remnants, and a container restart proves the already-bootstrapped
+  detection skips provisioning on a second boot.
+- `describe("SSH surfaces")` (inside `user-install`) proves the two
+  remaining PATH hooks on the real sshd: the suite generates a throwaway
+  keypair, injects the public half through the same `SSH_AUTHORIZED_KEY`
+  env var production uses, and publishes a random loopback port — then
+  asserts that both an SSH login shell (`/etc/profile.d`) and a bare
+  `ssh host <cmd>` (the `~/.bashrc` head above the interactive guard)
+  resolve and run default-profile tools. The key and the port are throwaway
+  and leave no residue: the key directory is deleted in teardown, the port
+  dies with the container.
+- `describe("recreate")` (inside `user-install`) protects the `/nix`
+  volume's persistence promise: the stack comes down keeping volumes and
+  back up, the recreated container gates on the sshd healthcheck again,
+  every default-profile tool and carve-out resolves from the kept volume
+  (the profile bin, `~/.cargo/bin` or `~/.local/bin`, never the apt
+  baseline), and the
+  Bootstrap script never re-runs.
+- `tests/user-install.test.ts` unit-tests the Bootstrap script itself,
+  Docker-free: the shared curl wrapper every vendor-installer fetch goes
+  through is lifted out of the script by name and run against a loopback
+  HTTPS stand-in for a vendor endpoint (self-signed throwaway certificate,
+  passed through the wrapper's own `"$@"`). It pins the retry contract — a
+  transient 503 is retried and the fetch still succeeds, a permanent 404
+  fails on the first attempt, and the wrapper stays the only curl
+  invocation in the script — so first boot keeps riding out vendor-endpoint
+  flakiness instead of dying to it.
 
 ## Lint, formatting and type checking
 
@@ -151,8 +228,9 @@ shell shim delegating to its sibling `.ts` implementation — the same files
   configured in `.lintstagedrc.json`); then the blocking gates: ShellCheck
   on staged shell files, Compose validation when YAML is staged, and the
   full type check.
-- `pre-push` — the Docker test suite (`bun run test`), so the slow suite
-  runs once per push instead of per commit.
+- `pre-push` — the full test suite (`bun run test`: the Docker suite plus
+  the Docker-free Bootstrap-script unit tests), so the slow half runs once
+  per push instead of per commit.
 - `post-checkout` / `post-merge` — rerun `bun install` so `node_modules`
   never goes stale after a checkout, merge or pull.
 
@@ -184,7 +262,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 
 ## Repository map
 
-- `src/` — the main source: Dockerfile, entrypoint, profile loader, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
+- `src/` — the main source: Dockerfile, entrypoint, profile scripts, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
 - `tests/` — the Tests stack and the Bun test suite
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Base compose_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records
