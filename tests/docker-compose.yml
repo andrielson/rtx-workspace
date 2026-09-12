@@ -19,9 +19,13 @@ services:
     # The test suite's SSH harness: compose interpolates the public half of a
     # throwaway generated key from the invoking process's environment (it
     # wins over the dummy env_file), and the Bootstrap script's setup_ssh
-    # wires it into authorized_keys on first boot.
+    # wires it into authorized_keys on first boot. MIRROR_PROBE is the
+    # Environment-mirror acceptance probe: the recreate test brings the stack
+    # back up with it set, proving a container recreated with a new variable
+    # projects it onto the SSH surfaces.
     environment:
       SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
+      MIRROR_PROBE: ${MIRROR_PROBE:-}
     # The matching throwaway SSH surface: random host port (resolved by the
     # suite through `docker compose port`), gone with the container when the
     # stack comes down. Every interface, not loopback-only: a runner inside

@@ -1,5 +1,5 @@
 *
 !01-home-bash-env.sh
-!02-home-nix-profile.sh
 !docker-entrypoint.sh
+!home-env-mirror.sh
 !sshd_config_ubuntu

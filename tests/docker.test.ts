@@ -147,23 +147,46 @@ describe('Dockerfile', () => {
     })
   })
 
-  describe('PATH hooks', () => {
-    test.each(['/etc/profile.d/01-home-bash-env.sh', '/etc/profile.d/02-home-nix-profile.sh'])(
-      '%s is executable',
-      async (path) => {
-        await execInWorkspace(`test -x ${path}`)
-      },
-    )
+  describe('env loading', () => {
+    test('the Env loader is executable', async () => {
+      await execInWorkspace('test -x /etc/profile.d/01-home-bash-env.sh')
+    })
 
-    test('the bashrc export sits above the interactive guard', async () => {
-      // sshd-spawned non-interactive shells (`ssh host <cmd>`) source
-      // ~/.bashrc but stop at Debian's interactive guard — the hook only
-      // works above it.
-      const bashrc = await execInWorkspace('cat ~/.bashrc')
-      const hook = bashrc.indexOf('.nix-profile/bin')
-      const guard = bashrc.indexOf('case $- in')
-      expect(hook).toBeGreaterThanOrEqual(0)
-      expect(guard).toBeGreaterThan(hook)
+    test('the Environment mirror is executable', async () => {
+      await execInWorkspace('test -x /usr/local/bin/home-env-mirror')
+    })
+
+    // The interactive non-login surface AND the sshd-spawned command
+    // surface: interactive shells read /etc/bash.bashrc in full, while
+    // Debian's bash patch makes an `ssh host <cmd>` shell source it instead
+    // of reading BASH_ENV — both stop at the file's non-interactive guard,
+    // so the loader only works above it.
+    test('/etc/bash.bashrc activates the Env loader above its non-interactive guard', async () => {
+      const bashrc = await execInWorkspace('cat /etc/bash.bashrc')
+      const loader = bashrc.indexOf('source /etc/profile.d/01-home-bash-env.sh')
+      // Matched without the literal "${" so Biome does not mistake the
+      // shell parameter expansion for a template placeholder.
+      const guard = bashrc.indexOf('PS1-}" ] && return')
+      expect(loader).toBeGreaterThanOrEqual(0)
+      expect(guard).toBeGreaterThan(loader)
+    })
+
+    test('~/.bashrc is stock — no image wiring inside the home', async () => {
+      // The retired wiring prepended hooks above ~/.bashrc's interactive
+      // guard; grep exits non-zero on zero matches (and throws inside
+      // execInWorkspace), so the result lands through a conditional echo.
+      expect(
+        await execInWorkspace('if grep --quiet nix-profile ~/.bashrc; then echo present; else echo absent; fi'),
+      ).toBe('absent')
+    })
+
+    // The non-interactive SSH surface: sshd injects BASH_ENV into every
+    // session — the only channel that reaches non-interactive bash, which
+    // reads no init file of its own.
+    test('sshd_config injects BASH_ENV into every session', async () => {
+      await execInWorkspace(
+        'grep --quiet "^SetEnv BASH_ENV=/etc/profile.d/01-home-bash-env.sh$" /etc/sshd/sshd_config_ubuntu',
+      )
     })
   })
 
@@ -525,25 +548,33 @@ describe('user-install', () => {
     }, 60_000)
   })
 
-  // The remaining two PATH-hook surfaces, end to end through the real
-  // sshd. sshd builds every session's environment from scratch (UsePAM no:
-  // PATH comes from a compiled-in default, not the container env), so the
-  // image ENV hook reaches neither surface — only the shell-init hooks
-  // below can put the default profile on PATH.
+  // The remaining shell surfaces, end to end through the real sshd. sshd
+  // builds every session's environment from scratch (UsePAM no: the image ENV
+  // never crosses it), so only the shell-init and BASH_ENV wiring below can
+  // put the default profile and the mirrored environment on them.
   describe('SSH surfaces', () => {
-    // A login shell runs /etc/profile, which resets PATH; the
-    // /etc/profile.d hooks are what restore the profile (PATH hook #2 of 3).
+    // A login shell runs /etc/profile, which resets PATH; the Env loader in
+    // /etc/profile.d is what restores the profile.
     test('a login shell resolves and runs default-profile tools', async () => {
       expect(await sshLogin('command -v rg')).toBe('/nix/ubuntu/.nix-profile/bin/rg')
       expect(await sshLogin('rg --version')).toMatch(/^ripgrep \d+/)
     }, 60_000)
 
-    // A bare `ssh host <cmd>` is a non-login bash that reaches only the
-    // head of ~/.bashrc, above Debian's interactive guard (PATH hook #3 of
-    // 3).
+    // A bare `ssh host <cmd>` is a non-interactive bash that reads no init
+    // file of its own — sshd's SetEnv hands it BASH_ENV, and the Env loader
+    // it points at applies the PATH hooks.
     test('a bare ssh command resolves and runs them too', async () => {
       expect(await sshCommand('command -v jq')).toBe('/nix/ubuntu/.nix-profile/bin/jq')
       expect(await sshCommand('jq --version')).toMatch(/^jq-\d+/)
+    }, 60_000)
+
+    // The coding-agent surface: a non-interactive bash spawned locally under
+    // an SSH-descended server (ZCode's Bash tool pattern) inherits BASH_ENV
+    // and nothing else — exactly what a nested `bash -c` sees, and the
+    // mirrored container environment through it.
+    test('a non-interactive bash under SSH loads the mirrored environment', async () => {
+      expect(await sshCommand('printenv BASH_ENV')).toBe('/etc/profile.d/01-home-bash-env.sh')
+      expect(await sshCommand('bash -c "printenv UV_PYTHON"')).toBe('3.14')
     }, 60_000)
 
     // The socket-group regression: compose's group_add grants the docker
@@ -574,6 +605,11 @@ describe('user-install', () => {
       // The bootstrap's marker line must not appear again…
       const logs = await $`docker logs --since ${since} ${container}`.text()
       expect(logs).not.toContain(bootstrapMarker)
+      // …the Environment mirror did re-run with the entrypoint (a restart is
+      // a boot): the regenerated file carries its generation header…
+      expect(await $`docker exec --user ubuntu ${container} head --lines=1 /nix/ubuntu/.bash_env`.text()).toContain(
+        'Generated at every boot',
+      )
       // …and the provisioned tools must survive the restart.
       expect(await execBare('java --version')).toMatch(/GraalVM CE/)
     }, 300_000)
@@ -586,13 +622,21 @@ describe('user-install', () => {
   // asserted here, the absent marker line is the evidence.
   describe('recreate', () => {
     test('down keeping volumes, then up, boots provisioned without re-bootstrapping', async () => {
-      // No --volumes: the named nix volume is exactly what must survive
-      // the recreate.
+      // No --volumes: the named nix volume is exactly what must survive the
+      // recreate.
       await $`${compose} down --remove-orphans`.env(stackEnv).quiet()
-      // up --wait re-gates on the sshd healthcheck: the recreated
-      // workspace must come back healthy (a bare volume would have to
-      // re-provision first, which the log check below forbids).
-      await $`${compose} up --detach --wait --wait-timeout 600`.env(stackEnv)
+      // MIRROR_PROBE rides this up only: the recreated container gains a new
+      // environment variable, and the Environment mirror must project it
+      // onto the User environment file — asserted on the SSH surface, where
+      // docker exec's native env would mask the mirror.
+      const recreateEnv = { ...stackEnv, MIRROR_PROBE: 'mirrored' }
+      await $`${compose} up --detach --wait --wait-timeout 600`.env(recreateEnv).quiet()
+
+      // The recreate brought a new container with a new published port; the
+      // SSH assertion below needs today's mapping, not the first boot's.
+      const republished = (await $`${compose} port workspace 22`.env(recreateEnv).text()).trim()
+      expect(republished).toMatch(/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/)
+      sshPort = republished.split(':')[1] ?? ''
 
       // The new container's logs cover its whole life, so no --since: the
       // bootstrap's marker line must be absent…
@@ -612,6 +656,9 @@ describe('user-install', () => {
       for (const path of paths) {
         expect(path).toMatch(/^\/nix\/ubuntu\/\.(nix-profile|cargo|local)\/bin\//)
       }
+      // …the variable new to the recreated container reached the SSH surface
+      // through the regenerated User environment file…
+      expect(await sshCommand('printenv MIRROR_PROBE')).toBe('mirrored')
       // …and a representative tool runs.
       expect(await execBare('java --version')).toMatch(/GraalVM CE/)
     }, 300_000)

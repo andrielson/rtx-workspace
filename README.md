@@ -56,16 +56,22 @@ Nix itself as the only tool-side content (the reasoning is recorded in
   `sandbox = false` — with the home moved to `/nix/ubuntu` so a single
   `/nix` volume persists store, profiles and user state across container
   recreation;
-- wires three PATH hooks for the Nix profile: the image `ENV` (the only hook
-  a bare `docker exec` sees), `/etc/profile.d/02-home-nix-profile.sh` for SSH
-  login shells, and a guarded `$HOME`-relative export above the interactive
-  guard in `~/.bashrc` for `ssh host <cmd>` — non-ubuntu logins stay
-  harmless;
+- makes the container environment the single source of truth and projects it
+  onto every shell surface through one Env loader,
+  `/etc/profile.d/01-home-bash-env.sh` (the reasoning is recorded in
+  [ADR 0006](docs/adr/0006-container-env-single-source-of-truth.md)): login
+  shells reach it via `/etc/profile.d`, interactive non-login shells and
+  `ssh host <cmd>` via the top of `/etc/bash.bashrc` (Debian's bash patch
+  routes sshd-spawned command shells there, around `BASH_ENV`), and the
+  non-interactive bash a session's servers spawn locally — the coding
+  agents' Bash tools — via the `BASH_ENV` that sshd's `SetEnv` injects;
+  `~/.bashrc` stays stock, and a bare `docker exec` needs no wiring (it
+  carries the container environment natively);
 - copies `gosu` (from `tianon/gosu`) into `/usr/local/bin` and drops
-  configuration into place: `docker-entrypoint`, the
-  `01-home-bash-env.sh` profile loader and `sshd_config_ubuntu`. The
-  `ubuntu` user's password is locked — access is SSH-key only — and there is
-  no sudo anywhere in the image;
+  configuration into place: `docker-entrypoint`, `home-env-mirror` (the
+  Environment mirror), the `01-home-bash-env.sh` Env loader and
+  `sshd_config_ubuntu`. The `ubuntu` user's password is locked — access is
+  SSH-key only — and there is no sudo anywhere in the image;
 - declares `VOLUME /nix` and runs as `ENTRYPOINT ["docker-entrypoint"]` with
   no `CMD`: invoked without arguments the entrypoint boots the workspace and
   ends in the foreground sshd; invoked with arguments it `exec`s them
@@ -78,15 +84,20 @@ carries none: SSH sessions rebuild their groups from `/etc/group`, which
 compose's `group_add` grant never reaches, so without this the socket would
 deny every docker call made from a login shell.
 
-On first boot `src/docker-entrypoint.sh` waits until nginx is reachable,
-then pipes `src/user-install.sh` — the **Bootstrap script** — through `gosu`
-as `ubuntu`. It runs only while the volume is fresh (once OpenCode is
-present, subsequent boots skip straight to sshd), and `SKIP_USER_INSTALL=1`
-skips provisioning on any boot — the escape hatch for bringing a container
-up without waiting on the bootstrap or its nginx dependency. The bootstrap writes
-`~/.bash_env` so SSH sessions inherit the container environment, configures
-git against GitHub through `GH_TOKEN`, and installs the public key from
-`SSH_AUTHORIZED_KEY`. Its install half is one unattended `nix profile add` of
+At every boot it first runs `home-env-mirror` — the **Environment mirror** —
+regenerating `~/.bash_env` (the **User environment file**) as a one-way
+projection of the container environment, so a container recreated with new
+or removed variables stays projected onto every shell surface; personal
+variables belong in `.env.service`, the Compose env file that feeds the
+container environment. On first boot the entrypoint then waits until nginx
+is reachable and pipes `src/user-install.sh` — the **Bootstrap script** —
+through `gosu` as `ubuntu`. The bootstrap runs only while the volume is
+fresh (once OpenCode is present, subsequent boots skip straight to sshd),
+and `SKIP_USER_INSTALL=1` skips provisioning on any boot — the escape hatch
+for bringing a container up without waiting on the bootstrap or its nginx
+dependency. It configures git against GitHub through `GH_TOKEN`, and
+installs the public key from `SSH_AUTHORIZED_KEY`. Its install half is one
+unattended `nix profile add` of
 `nixpkgs#` packages (the flake-registry shorthand resolves to
 nixpkgs-unstable): the **default profile** carries SDKMAN's set with GraalVM
 CE (Gradle, Kotlin, Maven, Quarkus, Scala), Go, PHP + Composer, gh, git, yq
@@ -167,7 +178,7 @@ volume do not exist — so the suite also runs from inside a workspace (see
   container (entrypoint replaced by `sleep infinity`, dependencies skipped)
   is probed with `docker compose exec` as the `ubuntu` user (plus one bare
   `docker exec` for the image-ENV PATH hook) across nine groups — nix,
-  retired toolchains and managers, environment, PATH hooks, files and
+  retired toolchains and managers, environment, env loading, files and
   permissions, privileges, image config, entrypoint, and system packages.
 - `describe("user-install")` (in `tests/docker.test.ts`) exercises the full
   first-boot flow through nginx: the Tests stack's `up --wait` gates on the
@@ -178,24 +189,28 @@ volume do not exist — so the suite also runs from inside a workspace (see
   shell), the retired managers leave no
   remnants, and a container restart proves the already-bootstrapped
   detection skips provisioning on a second boot.
-- `describe("SSH surfaces")` (inside `user-install`) proves the two
-  remaining PATH hooks on the real sshd: the suite generates a throwaway
-  keypair, injects the public half through the same `SSH_AUTHORIZED_KEY`
-  env var production uses, and publishes a random port on every interface
-  (a loopback-bound one would be unreachable from inside a workspace —
+- `describe("SSH surfaces")` (inside `user-install`) proves the remaining
+  shell surfaces on the real sshd: the suite generates a throwaway keypair,
+  injects the public half through the same `SSH_AUTHORIZED_KEY` env var
+  production uses, and publishes a random port on every interface (a
+  loopback-bound one would be unreachable from inside a workspace —
   [ADR 0005](docs/adr/0005-tests-stack-ssh-on-all-interfaces.md)) — then
-  asserts that both an SSH login shell (`/etc/profile.d`) and a bare
-  `ssh host <cmd>` (the `~/.bashrc` head above the interactive guard)
-  resolve and run default-profile tools. The key and the port are throwaway
-  and leave no residue: the key directory is deleted in teardown, the port
-  dies with the container.
+  asserts that an SSH login shell (`/etc/profile.d`), a bare
+  `ssh host <cmd>` (the loader at the top of `/etc/bash.bashrc`, through
+  Debian's ssh patch) and a non-interactive `bash -c` under SSH (the
+  coding-agent pattern) resolve default-profile tools and carry the mirrored
+  environment. The key and the
+  port are throwaway and leave no residue: the key directory is deleted in
+  teardown, the port dies with the container.
 - `describe("recreate")` (inside `user-install`) protects the `/nix`
   volume's persistence promise: the stack comes down keeping volumes and
   back up, the recreated container gates on the sshd healthcheck again,
   every default-profile tool and carve-out resolves from the kept volume
   (the profile bin, `~/.cargo/bin` or `~/.local/bin`, never the apt
   baseline), and the
-  Bootstrap script never re-runs.
+  Bootstrap script never re-runs — the stack also comes back with a new
+  `MIRROR_PROBE` variable, proving the Environment mirror projects
+  container-environment changes onto the SSH surfaces.
 - `tests/user-install.test.ts` unit-tests the Bootstrap script itself,
   Docker-free: the shared curl wrapper every vendor-installer fetch goes
   through is lifted out of the script by name and run against a loopback
@@ -286,7 +301,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 
 ## Repository map
 
-- `src/` — the main source: Dockerfile, entrypoint, profile scripts, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
+- `src/` — the main source: Dockerfile, entrypoint, the Environment mirror and Env loader, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
 - `tests/` — the Tests stack and the Bun test suite
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Base compose_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records

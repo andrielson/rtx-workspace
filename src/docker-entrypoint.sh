@@ -43,6 +43,16 @@ ensure_docker_socket_group() {
   usermod --append --groups "${docker_gid}" ubuntu
 }
 
+mirror_user_environment() {
+  # The Environment mirror: a one-way projection of the container
+  # environment into the User environment file, regenerated wholesale at
+  # every boot — a container recreated with new or removed variables stays
+  # projected onto every shell surface (see ADR 0006). It runs before the
+  # first-boot decision so fresh and kept volumes alike carry today's
+  # environment; a failure aborts the boot rather than serving a stale file.
+  gosu ubuntu home-env-mirror
+}
+
 main() {
   # id's exit status is irrelevant here: the string comparison is the check.
   # shellcheck disable=SC2312
@@ -52,6 +62,7 @@ main() {
   fi
 
   ensure_docker_socket_group
+  mirror_user_environment
 
   # SKIP_USER_INSTALL=1 skips first-boot provisioning on any boot — the
   # escape hatch for coming up without the bootstrap (and its nginx

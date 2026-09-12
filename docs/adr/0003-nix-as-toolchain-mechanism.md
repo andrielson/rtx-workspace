@@ -62,3 +62,10 @@ script, Web root — change in that effort, not before.
   — `nix profile install` is that command's deprecated alias, and the
   registry shorthand resolves to nixpkgs-unstable exactly like the explicit
   flake ref.
+- 2026-09-12: the three PATH hooks reorganised under the single Env loader of
+  [ADR 0006](0006-container-env-single-source-of-truth.md) — the hooks moved
+  into `/etc/profile.d/01-home-bash-env.sh`, the `~/.bashrc` prepend and
+  `02-home-nix-profile.sh` retired, and `BASH_ENV` (sshd `SetEnv`) became the
+  non-interactive surface. The hook set gained `~/.cargo/bin`, matching the
+  image ENV PATH the frozen `~/.bash_env` literal used to smuggle onto SSH
+  shells.

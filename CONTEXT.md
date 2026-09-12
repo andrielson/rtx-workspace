@@ -24,6 +24,18 @@ _Avoid_: static files, www
 `user-install.sh`, the script a workspace fetches from nginx and runs as the ubuntu user when its `/nix` volume is fresh.
 _Avoid_: installer, setup script
 
+**User environment file**:
+The single file in the ubuntu home that projects the container environment onto every shell surface; pure exports regenerated at every boot, never hand-edited and never carrying a PATH literal (the Env loader reconstructs PATH).
+_Avoid_: bash env file, env file, profile
+
+**Environment mirror**:
+The entrypoint's one-way, every-boot regeneration of the User environment file from the container environment (image ENV, Compose env file, runtime-injected vars); the file is a projection of the container environment, never a second source of truth.
+_Avoid_: env merge, env sync
+
+**Env loader**:
+The single static script wired into every shell-activation surface — login shells, interactive non-login shells, and non-interactive shells through `BASH_ENV` — that applies the PATH hooks and sources the User environment file.
+_Avoid_: hook, profile script
+
 **Default profile**:
 The Nix profile the Bootstrap script installs in one unattended `nix profile add` of `nixpkgs#` packages (the flake-registry shorthand resolves to nixpkgs-unstable) — every stable toolchain and everyday CLI (GraalVM CE and the JVM build tools, Go, PHP + Composer, the daily CLIs, the everyday utilities); `yq` rides under the nixpkgs attr `yq-go`.
 _Avoid_: tool set, package list

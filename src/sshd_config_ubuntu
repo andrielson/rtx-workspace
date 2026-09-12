@@ -3,5 +3,16 @@ PermitRootLogin no
 AuthenticationMethods publickey
 PasswordAuthentication no
 UsePAM no
+
+# Inject the Env loader's BASH_ENV into every session's environment. sshd
+# builds each session environment from scratch (the image ENV never crosses
+# it), and the shells a session's server processes spawn locally (VS Code
+# Remote, Zed, the coding agents' Bash tools) read no init file of their
+# own — BASH_ENV is the one mechanism that reaches them. The sshd-spawned
+# command shell itself (`ssh host <cmd>`) is Debian-bash territory: its
+# patch sources /etc/bash.bashrc instead of BASH_ENV, where the loader
+# rides at the top (see ADR 0006).
+SetEnv BASH_ENV=/etc/profile.d/01-home-bash-env.sh
+
 X11Forwarding no
 Subsystem sftp internal-sftp

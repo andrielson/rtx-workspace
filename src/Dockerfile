@@ -79,17 +79,13 @@ FROM scratch-root AS scratch-nix
 
 COPY --from=scratch-target-arch --chown=ubuntu:ubuntu /nix-linux.tar.xz /opt/nix-linux.tar.xz
 
-# --chown because the ubuntu-user stage below must be able to prepend the
-# snippet to ~/.bashrc and then delete it from sticky /tmp.
-COPY --chown=ubuntu:ubuntu 02-home-nix-profile.sh /tmp/02-home-nix-profile.sh
-
 # USER is exported because the official installer consults it while Docker
 # only sets the uid/gid for USER.
 USER ubuntu
 
 ENV USER=ubuntu
 
-RUN tar --directory=/tmp --extract --strip-components=1 --file /opt/nix-linux.tar.xz \
+RUN tar --directory=/tmp --extract --strip-components=1 --file=/opt/nix-linux.tar.xz \
   && /tmp/install \
     --no-channel-add \
     --no-daemon \
@@ -98,10 +94,7 @@ RUN tar --directory=/tmp --extract --strip-components=1 --file /opt/nix-linux.ta
   && printf '%s\n' \
     'experimental-features = nix-command flakes' \
     'sandbox = false' \
-    >> ~/.config/nix/nix.conf \
-  && cat /tmp/02-home-nix-profile.sh ~/.bashrc > ~/.bashrc.new \
-  && mv ~/.bashrc.new ~/.bashrc \
-  && rm /tmp/02-home-nix-profile.sh
+    >> ~/.config/nix/nix.conf
 
 
 FROM ubuntu:26.04 AS scratch-copies
@@ -114,11 +107,16 @@ COPY --link --from=scratch-nix /nix /__SCRATCH__/nix
 
 COPY --link docker-entrypoint.sh /__SCRATCH__/usr/local/bin/docker-entrypoint
 
-COPY --link 01-home-bash-env.sh /__SCRATCH__/etc/profile.d/
+# The Environment mirror the entrypoint runs as ubuntu at every boot.
+COPY --link home-env-mirror.sh /__SCRATCH__/usr/local/bin/home-env-mirror
 
-# PATH hook #2 of 3: /etc/profile.d, sourced by SSH login shells (VS Code
-# Remote SSH, Zed); /etc/profile resets whatever the image ENV had set.
-COPY --link 02-home-nix-profile.sh /__SCRATCH__/etc/profile.d/
+# Env loader: sourced through /etc/profile.d by login shells, through the
+# tail of /etc/bash.bashrc by interactive non-login shells, and through
+# BASH_ENV — which sshd's SetEnv (sshd_config_ubuntu) injects into every
+# session — by the non-interactive shells that read no init file of their
+# own (the Bash tools of the coding agents). It applies the PATH hooks and
+# sources the User environment file (see ADR 0006).
+COPY --link 01-home-bash-env.sh /__SCRATCH__/etc/profile.d/
 
 COPY --link sshd_config_ubuntu /__SCRATCH__/etc/sshd/
 
@@ -126,6 +124,7 @@ RUN chown --recursive ubuntu:ubuntu /__SCRATCH__/nix \
   && chmod --recursive go-w /__SCRATCH__/nix/ubuntu/ \
   && chmod --verbose 0755 \
     /__SCRATCH__/usr/local/bin/docker-entrypoint \
+    /__SCRATCH__/usr/local/bin/home-env-mirror \
     /__SCRATCH__/etc/profile.d/*
 
 
@@ -136,10 +135,28 @@ FROM scratch-root
 
 COPY --from=scratch-copies /__SCRATCH__/ /
 
-# PATH hook #1 of 3: image ENV — the only hook a bare `docker exec ... <tool>`
-# (no shell at all) ever sees. Hook #3 lives inside ~/.bashrc, prepended
-# above Debian's interactive guard in the scratch-nix stage so
-# `ssh host <cmd>` and `docker exec -it ... bash` resolve the profile too.
+# The interactive non-login surface (VS Code terminals, `docker exec -it ...
+# bash`) and the sshd-spawned command surface: interactive shells read
+# /etc/bash.bashrc in full, while Debian's bash patch makes an
+# `ssh host <cmd>` shell source it instead of reading BASH_ENV — and both
+# paths stop at the file's non-interactive guard, so the loader rides at
+# the very top. The loader's idempotence flag keeps the login double path
+# (profile.d plus this file, which /etc/profile also sources) harmless.
+# ~/.bashrc stays stock — nothing user-owned carries image wiring (see
+# ADR 0006). Prepending line-by-line (no ${} expansion — the Dockerfile
+# would substitute shell variables before sh ever sees them).
+RUN { printf '%s\n' \
+    '# rtx-workspace: activate the user environment (see ADR 0006).' \
+    'source /etc/profile.d/01-home-bash-env.sh' \
+    ''; \
+  cat /etc/bash.bashrc; \
+  } > /etc/bash.bashrc.new \
+  && mv /etc/bash.bashrc.new /etc/bash.bashrc
+
+# PATH hook: image ENV — the only activation a bare `docker exec ... <tool>`
+# (no shell at all) ever sees. docker exec already carries the container
+# environment natively — the single source of truth the Environment mirror
+# projects onto every shell surface (see ADR 0006).
 ENV PATH="/nix/ubuntu/.nix-profile/bin:/nix/ubuntu/.cargo/bin:/nix/ubuntu/.local/bin:$PATH"
 
 VOLUME /nix
