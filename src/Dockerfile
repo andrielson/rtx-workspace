@@ -144,6 +144,6 @@ ENV PATH="/nix/ubuntu/.nix-profile/bin:/nix/ubuntu/.cargo/bin:/nix/ubuntu/.local
 
 VOLUME /nix
 
+# No CMD on purpose: the entrypoint owns the default command (sshd) and
+# replaces the boot flow entirely when invoked with arguments.
 ENTRYPOINT ["docker-entrypoint"]
-
-CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/sshd/sshd_config_ubuntu"]

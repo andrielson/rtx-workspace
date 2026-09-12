@@ -66,8 +66,11 @@ Nix itself as the only tool-side content (the reasoning is recorded in
   `01-home-bash-env.sh` profile loader and `sshd_config_ubuntu`. The
   `ubuntu` user's password is locked — access is SSH-key only — and there is
   no sudo anywhere in the image;
-- declares `VOLUME /nix`, runs as `ENTRYPOINT ["docker-entrypoint"]`, and
-  starts sshd as the default command.
+- declares `VOLUME /nix` and runs as `ENTRYPOINT ["docker-entrypoint"]` with
+  no `CMD`: invoked without arguments the entrypoint boots the workspace and
+  ends in the foreground sshd; invoked with arguments it `exec`s them
+  directly, so a one-off `docker run rtx-workspace <cmd>` skips the boot
+  flow (socket-group setup, nginx wait, provisioning) entirely.
 
 On every boot `src/docker-entrypoint.sh` also enrolls `ubuntu` in a group
 matching the mounted Docker socket's GID, creating the group when the image
@@ -78,7 +81,9 @@ deny every docker call made from a login shell.
 On first boot `src/docker-entrypoint.sh` waits until nginx is reachable,
 then pipes `src/user-install.sh` — the **Bootstrap script** — through `gosu`
 as `ubuntu`. It runs only while the volume is fresh (once OpenCode is
-present, subsequent boots skip straight to sshd). The bootstrap writes
+present, subsequent boots skip straight to sshd), and `SKIP_USER_INSTALL=1`
+skips provisioning on any boot — the escape hatch for bringing a container
+up without waiting on the bootstrap or its nginx dependency. The bootstrap writes
 `~/.bash_env` so SSH sessions inherit the container environment, configures
 git against GitHub through `GH_TOKEN`, and installs the public key from
 `SSH_AUTHORIZED_KEY`. Its install half is one unattended `nix profile add` of
@@ -161,9 +166,9 @@ volume do not exist — so the suite also runs from inside a workspace (see
   alone delivers before the Bootstrap script ever runs. A one-off workspace
   container (entrypoint replaced by `sleep infinity`, dependencies skipped)
   is probed with `docker compose exec` as the `ubuntu` user (plus one bare
-  `docker exec` for the image-ENV PATH hook) across eight groups — nix,
+  `docker exec` for the image-ENV PATH hook) across nine groups — nix,
   retired toolchains and managers, environment, PATH hooks, files and
-  permissions, privileges, image config, and system packages.
+  permissions, privileges, image config, entrypoint, and system packages.
 - `describe("user-install")` (in `tests/docker.test.ts`) exercises the full
   first-boot flow through nginx: the Tests stack's `up --wait` gates on the
   sshd healthcheck (which by construction only turns healthy after

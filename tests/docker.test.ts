@@ -17,6 +17,10 @@ const env = {
   DOCKER_GID: String(statSync('/var/run/docker.sock').gid),
 }
 
+// The Bootstrap script's distinctive first log line (install_nix_profile in
+// user-install.sh) — its absence proves a boot skipped provisioning.
+const bootstrapMarker = 'Installing the default Nix profile'
+
 // bun:test kills hooks after 5s by default; the --pull build fetches base
 // images over the network and can take far longer, so every hook carries an
 // explicit timeout.
@@ -38,7 +42,8 @@ afterAll(async () => {
 // container of the workspace service stands in for a booted workspace — its
 // entrypoint is replaced with `sleep infinity` so the first-boot install
 // never happens, and --no-deps keeps nginx (a dependency only that install
-// needs) out of it.
+// needs) out of it. The entrypoint group below is the exception: it boots
+// the real entrypoint to pin its two boot modes.
 describe('Dockerfile', () => {
   // compose exec resolves one-off `run` containers too (preferring a regular
   // `up` container when one exists); the only workspace container this
@@ -211,8 +216,11 @@ describe('Dockerfile', () => {
       expect(await inspectConfig('Entrypoint')).toEqual(['docker-entrypoint'])
     })
 
-    test('CMD runs the ubuntu sshd', async () => {
-      expect(await inspectConfig('Cmd')).toEqual(['/usr/sbin/sshd', '-D', '-e', '-f', '/etc/sshd/sshd_config_ubuntu'])
+    // The entrypoint owns the default command (exec'ing sshd when invoked
+    // with no arguments), so the image itself must declare none: a Cmd here
+    // would re-introduce a second source of truth for the boot command.
+    test('declares no CMD — the entrypoint owns the default command', async () => {
+      expect(await inspectConfig('Cmd')).toBeNull()
     })
 
     test('declares /nix as a volume', async () => {
@@ -224,6 +232,57 @@ describe('Dockerfile', () => {
       const pathPair = envPairs.find((pair) => pair.startsWith('PATH='))
       expect(pathPair).toStartWith('PATH=/nix/ubuntu/.nix-profile/bin:/nix/ubuntu/.cargo/bin:/nix/ubuntu/.local/bin')
     })
+  })
+
+  // The entrypoint contract: arguments replace the boot flow entirely (the
+  // command runs directly, with no nginx wait and no provisioning before
+  // it), and SKIP_USER_INSTALL=1 skips the first-boot provisioning while
+  // the rest of the boot still runs. The project volume is fresh here (the
+  // global hooks recreate it), so any provisioning path taken would show up
+  // against a nginx that --no-deps never started.
+  describe('entrypoint', () => {
+    test('arguments replace the boot flow and run directly', async () => {
+      // compose run has no long form for --rm.
+      const version = await $`${compose} run --rm --no-deps workspace nix --version`.env(env).text()
+
+      expect(version.trim()).toMatch(/^nix \(Nix\) 2\.\d+(\.\d+)?$/)
+    }, 30_000)
+
+    test('SKIP_USER_INSTALL=1 boots straight to sshd without provisioning', async () => {
+      const skipContainer = 'workspace-test-skip-install'
+      // Defensive teardown first: a failed prior run may have left it behind.
+      await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
+
+      // No arguments, so main runs; no deps, so nginx is absent — without
+      // the skip the entrypoint would sit waiting for it and sshd would
+      // never come up within the poll window below.
+      await $`${compose} run --detach --name ${skipContainer} --no-deps -e SKIP_USER_INSTALL=1 workspace`
+        .env(env)
+        .quiet()
+
+      try {
+        // Poll until sshd answers inside the container (the same probe the
+        // Tests stack's healthcheck uses); bash has no long form for -c, and
+        // nothrow() resolves the exit code instead of throwing on a failed
+        // probe.
+        const probe = 'exec 3<>/dev/tcp/127.0.0.1/22'
+        const probeOk = async () =>
+          (await $`docker exec ${skipContainer} bash -c ${probe}`.nothrow().quiet()).exitCode === 0
+        const deadline = Date.now() + 30_000
+        while (!(await probeOk())) {
+          if (Date.now() > deadline) throw new Error(`sshd never came up in ${skipContainer}`)
+          await Bun.sleep(1_000)
+        }
+
+        // sshd answering with neither the bootstrap's marker line nor the
+        // nginx wait line: the skip bypassed provisioning before any wait.
+        const logs = await $`docker logs ${skipContainer}`.text()
+        expect(logs).not.toContain(bootstrapMarker)
+        expect(logs).not.toContain('Waiting for ')
+      } finally {
+        await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
+      }
+    }, 60_000)
   })
 
   // Binary names differ from their apt packages: openssh-server is sshd.
@@ -496,10 +555,6 @@ describe('user-install', () => {
       expect((await sshLogin('id --groups')).split(/\s+/)).toContain(env.DOCKER_GID)
     }, 60_000)
   })
-
-  // The Bootstrap script's distinctive first log line (install_nix_profile
-  // in user-install.sh) — its absence proves a boot skipped provisioning.
-  const bootstrapMarker = 'Installing the default Nix profile'
 
   describe('second boot', () => {
     test('a restart skips provisioning and comes back with tools intact', async () => {
