@@ -20,7 +20,8 @@ becomes a fully equipped environment on its own.
   binary: it goes through Prettier and `prettier-plugin-sh`.
 - **openssh-client** — the test suite's real-SSH assertions (`ssh` and
   `ssh-keygen`) log into the Tests stack through a throwaway generated key
-  and a random loopback port.
+  and a random published port (on every interface, so the suite also runs
+  from inside a workspace).
 - **openssl** (1.1.1+) and **curl** — the Bootstrap script's unit tests
   stand up a loopback HTTPS stand-in for a vendor endpoint (throwaway
   self-signed certificate) and drive the real curl wrapper against it.
@@ -30,11 +31,11 @@ becomes a fully equipped environment on its own.
 The Compose files are layered through service-level `extends:` (the reasoning
 is recorded in [ADR 0001](docs/adr/0001-extends-based-compose-layering.md)):
 
-| File                        | Role                                                                                                                                                                                            |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/docker-compose.yml`    | **Base compose** — the single source of truth: the `workspace` service, its named `nix` volume, and the `nginx` service every stack needs                                                       |
-| `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222         |
-| `tests/docker-compose.yml`  | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment, throwaway SSH port) so tests run beside a live stack without touching it |
+| File                        | Role                                                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/docker-compose.yml`    | **Base compose** — the single source of truth: the `workspace` service, its named `nix` volume, and the `nginx` service every stack needs                                                                               |
+| `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222                                 |
+| `tests/docker-compose.yml`  | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment, throwaway SSH port, self-built nginx image) so tests run beside a live stack without touching it |
 
 ## The workspace image
 
@@ -67,6 +68,12 @@ Nix itself as the only tool-side content (the reasoning is recorded in
   no sudo anywhere in the image;
 - declares `VOLUME /nix`, runs as `ENTRYPOINT ["docker-entrypoint"]`, and
   starts sshd as the default command.
+
+On every boot `src/docker-entrypoint.sh` also enrolls `ubuntu` in a group
+matching the mounted Docker socket's GID, creating the group when the image
+carries none: SSH sessions rebuild their groups from `/etc/group`, which
+compose's `group_add` grant never reaches, so without this the socket would
+deny every docker call made from a login shell.
 
 On first boot `src/docker-entrypoint.sh` waits until nginx is reachable,
 then pipes `src/user-install.sh` — the **Bootstrap script** — through `gosu`
@@ -141,7 +148,12 @@ The Docker file (`tests/docker.test.ts`) needs a running Docker daemon,
 container can reach the host daemon) and `openssh-client` on the test host
 (see [Prerequisites](#prerequisites)). Global hooks build the image through
 the Tests stack (`build --pull`, so expect a slow first run) and tear the
-whole project down afterwards.
+whole project down afterwards. The Tests stack's nginx builds from
+`tests/Dockerfile.nginx` (the repository root as context, filtered by the
+root `.dockerignore`) rather than bind-mounting the Bootstrap script — bind
+sources resolve on the host, where the paths inside a workspace's `/nix`
+volume do not exist — so the suite also runs from inside a workspace (see
+[ADR 0004](docs/adr/0004-baked-nginx-bootstrap-script-for-tests-stack.md)).
 
 - `describe("Dockerfile")` verifies the **Image contract**: what the image
   alone delivers before the Bootstrap script ever runs. A one-off workspace
@@ -162,7 +174,9 @@ whole project down afterwards.
 - `describe("SSH surfaces")` (inside `user-install`) proves the two
   remaining PATH hooks on the real sshd: the suite generates a throwaway
   keypair, injects the public half through the same `SSH_AUTHORIZED_KEY`
-  env var production uses, and publishes a random loopback port — then
+  env var production uses, and publishes a random port on every interface
+  (a loopback-bound one would be unreachable from inside a workspace —
+  [ADR 0005](docs/adr/0005-tests-stack-ssh-on-all-interfaces.md)) — then
   asserts that both an SSH login shell (`/etc/profile.d`) and a bare
   `ssh host <cmd>` (the `~/.bashrc` head above the interactive guard)
   resolve and run default-profile tools. The key and the port are throwaway

@@ -17,7 +17,7 @@ The compose file under `tests/`; extends the Base compose with a throwaway ident
 _Avoid_: test compose, CI stack
 
 **Web root**:
-The nginx document root (`/usr/share/nginx/html/`) where the Base compose bind-mounts the Bootstrap script and from which workspaces fetch it.
+The nginx document root (`/usr/share/nginx/html/`) where the Base compose bind-mounts the Bootstrap script and from which workspaces fetch it; the Tests stack bakes the script into a built nginx image instead, since bind sources resolve daemon-side, where the repo's `/nix` volume paths do not exist.
 _Avoid_: static files, www
 
 **Bootstrap script**:

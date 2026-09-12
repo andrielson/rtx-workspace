@@ -1,0 +1,10 @@
+# The Tests stack's nginx build (tests/Dockerfile.nginx) uses the
+# repository root as its context so it can COPY src/user-install.sh. This
+# allowlist keeps that context at the single file it needs — node_modules
+# alone is 192M, and nothing else here is relevant to what nginx serves.
+# The workspace image is unaffected: it builds from src/, governed by
+# src/.dockerignore.
+*
+!src
+src/*
+!src/user-install.sh

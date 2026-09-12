@@ -1,0 +1,12 @@
+# syntax=docker/dockerfile:1
+# The Tests stack's nginx. The Base compose serves the Bootstrap script by
+# bind-mounting it into the web root, but the Docker daemon resolves bind
+# sources against the host filesystem — a path that does not exist when the
+# suite runs from inside a workspace, where the repo lives in the /nix
+# volume. Baking the script into an image ships it through the build
+# context instead, which always travels client-side. COPY sources are
+# relative to the context root (the repository root — see the Tests compose
+# file and the root .dockerignore that keeps that context small).
+FROM nginx:alpine
+
+COPY src/user-install.sh /usr/share/nginx/html/user-install.sh

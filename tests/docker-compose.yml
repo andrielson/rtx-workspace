@@ -22,12 +22,14 @@ services:
     # wires it into authorized_keys on first boot.
     environment:
       SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
-    # The matching throwaway SSH surface: loopback-only, random host port
-    # (resolved by the suite through `docker compose port`), gone with the
-    # container when the stack comes down.
+    # The matching throwaway SSH surface: random host port (resolved by the
+    # suite through `docker compose port`), gone with the container when the
+    # stack comes down. Every interface, not loopback-only: a runner inside
+    # a workspace cannot reach the host's loopback, only the host's gateway
+    # address (ADR 0005) — and a throwaway port and key bound the exposure.
     ports:
       - target: 22
-        host_ip: 127.0.0.1
+        host_ip: 0.0.0.0
         protocol: tcp
     # Healthy only once sshd answers — which happens after the first-boot
     # bootstrap finishes, so `up --wait` gates on a fully-booted workspace.
@@ -40,11 +42,23 @@ services:
 
   # Extending workspace carries its depends_on: nginx, but extends never
   # imports the sibling service — every consumer must materialize nginx
-  # itself. No overrides needed: the healthcheck lives in the Base.
+  # itself. This stack swaps the Base's bind mount for a built image: the
+  # daemon resolves bind sources against the host filesystem, where the
+  # repo does not exist when the suite runs from inside a workspace (the
+  # repo lives in the /nix volume), so the mounted web root turned into an
+  # empty auto-created directory and the healthcheck failed forever. The
+  # build context travels client-side, so it works from anywhere (ADR 0004).
+  # !override drops the inherited bind, and the dedicated tag keeps the
+  # build from shadowing the official nginx:alpine the Base declares.
   nginx:
     extends:
       file: ../src/docker-compose.yml
       service: nginx
+    image: rtx-workspace-tests-nginx:latest
+    build:
+      context: ..
+      dockerfile: tests/Dockerfile.nginx
+    volumes: !override []
 
 volumes:
   nix:

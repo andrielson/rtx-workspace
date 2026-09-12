@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { $ } from 'bun'
 
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -279,9 +279,9 @@ describe('user-install', () => {
   // the Tests stack declares it under `environment`, so compose interpolates
   // it from this process — and the Bootstrap script's setup_ssh wires it
   // into authorized_keys on first boot. The Tests stack publishes sshd on a
-  // random loopback port, resolved below through `compose port`. Both are
-  // throwaway: the key directory goes in afterAll, the port dies with the
-  // container in the global teardown's down.
+  // random port on every interface, resolved below through `compose port`.
+  // Both are throwaway: the key directory goes in afterAll, the port dies
+  // with the container in the global teardown's down.
   let keyDir = ''
   let keyPath = ''
   let sshPort = ''
@@ -289,6 +289,28 @@ describe('user-install', () => {
   // the key would look like config drift and recreate the container. Typed
   // wider than env's inferred literal so the key can join it.
   let stackEnv: Record<string, string | undefined> = env
+
+  // Where the published SSH port is reached from. A plain host uses its
+  // own loopback; a runner inside a container (marked by /.dockerenv)
+  // cannot reach the host's loopback, only the host itself through the
+  // default route's gateway — the one host address a container can use to
+  // reach a published port.
+  const defaultGateway = () => {
+    const routes = readFileSync('/proc/net/route', 'utf8')
+    for (const line of routes.split('\n').slice(1)) {
+      const [, destination, gateway] = line.trim().split(/\s+/)
+      if (destination === '00000000' && gateway) {
+        // /proc/net/route stores the gateway little-endian.
+        const bytes = gateway.match(/../g) ?? []
+        if (bytes.length === 4) {
+          const [b0 = '', b1 = '', b2 = '', b3 = ''] = bytes
+          return [b3, b2, b1, b0].map((byte) => Number.parseInt(byte, 16)).join('.')
+        }
+      }
+    }
+    throw new Error('no default route in /proc/net/route')
+  }
+  const sshHost = existsSync('/.dockerenv') ? defaultGateway() : '127.0.0.1'
 
   // Real-SSH helpers for the PATH-hook surfaces below. ssh has no long
   // options: -i names the identity, -p the port. BatchMode never prompts,
@@ -318,11 +340,11 @@ describe('user-install', () => {
   // The login-shell surface: no remote command, so sshd execs ubuntu's shell
   // as `-bash` and it reads the script from stdin.
   const sshLogin = async (script: string) =>
-    $`echo ${script} | ssh ${sshOptions()} ubuntu@127.0.0.1`.text().then((stdout) => stdout.trim())
+    $`echo ${script} | ssh ${sshOptions()} ubuntu@${sshHost}`.text().then((stdout) => stdout.trim())
 
   // The non-interactive surface: `ssh host <cmd>`.
   const sshCommand = async (script: string) =>
-    $`ssh ${sshOptions()} ubuntu@127.0.0.1 ${script}`.text().then((stdout) => stdout.trim())
+    $`ssh ${sshOptions()} ubuntu@${sshHost} ${script}`.text().then((stdout) => stdout.trim())
 
   beforeAll(async () => {
     keyDir = mkdtempSync(join(tmpdir(), 'rtx-workspace-tests-ssh-'))
@@ -340,11 +362,12 @@ describe('user-install', () => {
     // --wait-timeout is only a backstop beyond it.
     await $`${compose} up --detach --wait --wait-timeout 1500`.env(stackEnv)
 
-    // The Tests stack publishes sshd on a random loopback port; `compose
-    // port` names it as `127.0.0.1:<port>`. stackEnv keeps every command
-    // against this stack interpolating from the same environment.
+    // The Tests stack publishes sshd on a random port on every interface (a
+    // loopback-bound port would be unreachable from a workspace — ADR 0005);
+    // `compose port` names it as `<address>:<port>`. stackEnv keeps every
+    // command against this stack interpolating from the same environment.
     const published = (await $`${compose} port workspace 22`.env(stackEnv).text()).trim()
-    expect(published).toMatch(/^127\.0\.0\.1:\d+$/)
+    expect(published).toMatch(/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/)
     sshPort = published.split(':')[1] ?? ''
   }, 1_800_000)
 
@@ -457,11 +480,20 @@ describe('user-install', () => {
     }, 60_000)
 
     // A bare `ssh host <cmd>` is a non-login bash that reaches only the
-    // head of ~/.bashrc, above Debian's interactive guard (PATH hook #3
-    // of 3).
+    // head of ~/.bashrc, above Debian's interactive guard (PATH hook #3 of
+    // 3).
     test('a bare ssh command resolves and runs them too', async () => {
       expect(await sshCommand('command -v jq')).toBe('/nix/ubuntu/.nix-profile/bin/jq')
       expect(await sshCommand('jq --version')).toMatch(/^jq-\d+/)
+    }, 60_000)
+
+    // The socket-group regression: compose's group_add grants the docker
+    // socket's GID only to the container's process tree, but sshd rebuilds
+    // each session's groups from /etc/group — the entrypoint must
+    // materialize the group and ubuntu's membership there, or every docker
+    // call from an SSH shell dies on EACCES at the socket.
+    test('a login shell carries the docker socket group', async () => {
+      expect((await sshLogin('id --groups')).split(/\s+/)).toContain(env.DOCKER_GID)
     }, 60_000)
   })
 
