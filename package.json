@@ -8,7 +8,6 @@
     "lint:fix": "biome check --write .",
     "lint:sh": "shellcheck src/*.sh",
     "prepare": "husky",
-    "test": "bun test tests/",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -140,8 +140,10 @@ NVIDIA GPU with the NVIDIA container toolkit configured.
 The suite is two Bun test files driven through Bun Shell:
 
 ```bash
-bun run test # wraps: bun test tests/
+bun test
 ```
+
+Bun's test runner is built in — no `test` script needed.
 
 The Docker file (`tests/docker.test.ts`) needs a running Docker daemon,
 `/var/run/docker.sock` (its GID is injected into the Tests stack so the
@@ -242,9 +244,12 @@ shell shim delegating to its sibling `.ts` implementation — the same files
   configured in `.lintstagedrc.json`); then the blocking gates: ShellCheck
   on staged shell files, Compose validation when YAML is staged, and the
   full type check.
-- `pre-push` — the full test suite (`bun run test`: the Docker suite plus
-  the Docker-free Bootstrap-script unit tests), so the slow half runs once
-  per push instead of per commit.
+- `pre-push` — the `Dockerfile` block of the Docker suite only
+  (`bun test --only-failures --test-name-pattern Dockerfile`), so the slow
+  tests run once per push instead of per commit. The `user-install` half
+  hits real vendor endpoints and fails intermittently on network hiccups,
+  which made a full-suite push gate unreliable; run the full suite
+  manually with `bun test`.
 - `post-checkout` / `post-merge` — rerun `bun install` so `node_modules`
   never goes stale after a checkout, merge or pull.
 
