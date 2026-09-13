@@ -3,7 +3,9 @@
 # lockfiles, vendored agent tooling, husky's generated shims, or file types
 # outside Prettier's scope here (markdown/yaml/shell/Dockerfile). Ignore
 # files are excluded too: prettier-plugin-sh only supports them best-effort
-# (negation patterns can be mangled).
+# (negation patterns can be mangled). tests/src is a tracked symlink to
+# ../src — a build context, not source; ignoring it guards against
+# explicit-path runs formatting through the link.
 *.ts
 *.tsx
 *.js
@@ -17,5 +19,7 @@ bun.lock
 skills-lock.json
 .agents/
 .zcode/
+.worktrees/
+tests/src
 
 .husky/_
