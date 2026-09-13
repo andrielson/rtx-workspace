@@ -49,7 +49,7 @@ describe('Dockerfile', () => {
   // `up` container when one exists); the only workspace container this
   // project ever runs is the one-off below.
   const container = 'workspace-test-dockerfile'
-  // The image tag declared by the Base compose.
+  // The image tag declared by the Tests compose file.
   const image = 'rtx-workspace:latest'
 
   // Commands default to the ubuntu user: it is the real consumer of

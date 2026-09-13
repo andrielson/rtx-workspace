@@ -4,7 +4,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "biome check .",
-    "lint:compose": "docker compose --file src/docker-compose.yml config --quiet && docker compose --file docker-compose.yml config --quiet && docker compose --file tests/docker-compose.yml config --quiet",
+    "lint:compose": "docker compose --file tests/docker-compose.yml config --quiet",
     "lint:fix": "biome check --write .",
     "lint:sh": "shellcheck src/*.sh",
     "prepare": "husky",

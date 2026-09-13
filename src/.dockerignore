@@ -1,5 +1,11 @@
+# One context, two builders: the workspace image (whose Dockerfile copies
+# the runtime files below) and the Tests stack's nginx image, which builds
+# from this same directory through the tests/src symlink and additionally
+# copies user-install.sh into its web root (ADR 0007). The workspace
+# Dockerfile never copies the script — it only rides along in the context.
 *
 !01-home-bash-env.sh
 !docker-entrypoint.sh
 !home-env-mirror.sh
 !sshd_config_ubuntu
+!user-install.sh

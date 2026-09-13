@@ -1,19 +1,26 @@
-# Tests stack: a throwaway sibling of the real stack. Extends the Base
-# compose with an isolated identity — its own project name, container name,
-# project-scoped volume, and dummy env — so it runs beside the live project
-# (rtx-workspace) without touching it.
+# Tests stack: a standalone throwaway stack, isolated from any live one by
+# identity — its own project name, container name, project-scoped volume,
+# and dummy env — so it runs beside a real deployment without touching it.
+# Nothing is inherited through extends: every service is declared here in
+# full, and every relative path (env files, build contexts, the nginx
+# Dockerfile) resolves against this file's directory, tests/. Both builds
+# use context src, the tracked symlink tests/src -> ../src, so the uploaded
+# tree is exactly what a plain build from src/ would send (ADR 0007).
 name: rtx-workspace-tests
 
 services:
   workspace:
-    extends:
-      file: ../src/docker-compose.yml
-      service: workspace
     container_name: workspace-test
-    # extends unions env_file sequences; !override replaces the Base's
-    # ../.env.service so real secrets never reach test containers.
+    hostname: rtx-workspace
+    init: true
+    ipc: host
+    # Implicit Dockerfile: src/Dockerfile through the tests/src symlink.
+    build:
+      context: src
+    image: rtx-workspace:latest
+    # The dummy env file keeps real secrets out of test containers;
     # required: false keeps validation green on fresh clones.
-    env_file: !override
+    env_file:
       - path: .env.service.test
         required: false
     # The test suite's SSH harness: compose interpolates the public half of a
@@ -26,6 +33,16 @@ services:
     environment:
       SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
       MIRROR_PROBE: ${MIRROR_PROBE:-}
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: volume
+        source: nix
+        target: /nix
+    group_add:
+      - ${DOCKER_GID:-990}
+    working_dir: /nix/ubuntu
     # The matching throwaway SSH surface: random host port (resolved by the
     # suite through `docker compose port`), gone with the container when the
     # stack comes down. Every interface, not loopback-only: a runner inside
@@ -43,26 +60,33 @@ services:
       timeout: 5s
       retries: 110
       start_period: 60s
+    depends_on:
+      nginx:
+        condition: service_healthy
 
-  # Extending workspace carries its depends_on: nginx, but extends never
-  # imports the sibling service — every consumer must materialize nginx
-  # itself. This stack swaps the Base's bind mount for a built image: the
-  # daemon resolves bind sources against the host filesystem, where the
-  # repo does not exist when the suite runs from inside a workspace (the
-  # repo lives in the /nix volume), so the mounted web root turned into an
-  # empty auto-created directory and the healthcheck failed forever. The
-  # build context travels client-side, so it works from anywhere (ADR 0004).
-  # !override drops the inherited bind, and the dedicated tag keeps the
-  # build from shadowing the official nginx:alpine the Base declares.
+  # The workspace waits on nginx before its first boot. This stack bakes the
+  # Bootstrap script into a built image instead of bind-mounting it: the
+  # daemon resolves bind sources against the host filesystem, where the repo
+  # does not exist when the suite runs from inside a workspace (the repo
+  # lives in the /nix volume), so the mounted web root turned into an empty
+  # auto-created directory and the healthcheck failed forever. A build
+  # context, unlike a bind, always travels client-side, so it works from
+  # anywhere (ADR 0004). The context is the same tests/src symlink the
+  # workspace builds from, while the Dockerfile stays in tests/, outside the
+  # context, and reaches the builder through its own transfer (ADR 0007).
+  # The dedicated tag keeps the build from shadowing the official
+  # nginx:alpine.
   nginx:
-    extends:
-      file: ../src/docker-compose.yml
-      service: nginx
     image: rtx-workspace-tests-nginx:latest
     build:
-      context: ..
-      dockerfile: tests/Dockerfile.nginx
-    volumes: !override []
+      context: src
+      dockerfile: ../Dockerfile.nginx
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/user-install.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+      start_period: 5s
 
 volumes:
   nix:
