@@ -1,5 +1,9 @@
 name: CI
 
+# No workflow-level `paths` filter: the `main` ruleset requires the Hygiene
+# and Test suite checks on every pull request, and a workflow skipped by path
+# filtering never reports them, leaving the PR unmergeable. Jobs skip through
+# `if:` conditions instead — a skipped job reports success.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -20,8 +24,60 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # hygiene and test-suite gate on the same path set — one output for both
+      hygiene: ${{ steps.filter.outputs.hygiene }}
+      release: ${{ steps.filter.outputs.release }}
+    steps:
+      - name: Check out the repository (full history, for the range diff)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # workflow_dispatch runs everything (the manual self-heal path); a pull
+      # request diffs its own range; a push to main is a squash merge (direct
+      # pushes are blocked by the ruleset), so HEAD~1...HEAD is exactly the
+      # merged pull request's diff.
+      - name: Decide which jobs the changed paths concern
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == 'workflow_dispatch' ]]; then
+            echo 'hygiene=true' >> "${GITHUB_OUTPUT}"
+            echo 'release=true' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == 'pull_request' ]]; then
+            range="${BASE_SHA}...${HEAD_SHA}"
+          else
+            range='HEAD~1...HEAD'
+          fi
+          hygiene_paths=$(git diff --name-only "${range}" -- src tests .github/workflows/ci.yml package.json bun.lock)
+          if [[ -n "${hygiene_paths}" ]]; then
+            echo 'hygiene=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'hygiene=false' >> "${GITHUB_OUTPUT}"
+          fi
+          release_paths=$(git diff --name-only "${range}" -- src .github/workflows/ci.yml package.json)
+          if [[ -n "${release_paths}" ]]; then
+            echo 'release=true' >> "${GITHUB_OUTPUT}"
+          else
+            echo 'release=false' >> "${GITHUB_OUTPUT}"
+          fi
+
   hygiene:
     name: Hygiene
+    needs: changes
+    # Skipped — which reports success, so the ruleset's required check still
+    # passes — when the diff touches none of the gate paths above:
+    # documentation-only and repository-machinery changes validate locally
+    # through pre-commit.
+    if: needs.changes.outputs.hygiene == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -54,10 +110,11 @@ jobs:
 
   test-suite:
     name: Test suite
-    needs: hygiene
+    needs: [changes, hygiene]
     # Draft PRs run hygiene only; the suite joins when the PR is ready for
-    # review (ready_for_review re-triggers this workflow).
-    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'workflow_dispatch'
+    # review (ready_for_review re-triggers this workflow). Skipped together
+    # with hygiene when the diff matches no gate path.
+    if: needs.changes.outputs.hygiene == 'true' && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -94,10 +151,12 @@ jobs:
 
   release:
     name: Release
-    needs: hygiene
+    needs: [changes, hygiene]
     # Push to main is the merge; workflow_dispatch on main is the manual
     # self-heal path. The repository guard keeps forks from ever publishing.
-    if: github.repository == 'andrielson/rtx-workspace' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    # The release gate paths are a subset of hygiene's, so a skipped hygiene
+    # already implies this gate is false.
+    if: github.repository == 'andrielson/rtx-workspace' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
