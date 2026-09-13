@@ -202,6 +202,35 @@ and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
   invocation in the script — so first boot keeps riding out vendor-endpoint
   flakiness instead of dying to it.
 
+## Continuous integration and releases
+
+GitHub Actions (`.github/workflows/ci.yml`) gates every pull request and
+publishes Releases (the reasoning is recorded in
+[ADR 0008](docs/adr/0008-ci-gates-and-ghcr-releases.md)):
+
+- **Pull requests** run the hygiene battery — the same gates as
+  `pre-commit` (Biome, Prettier, `tsc`, ShellCheck, Compose validation) —
+  on every event, draft PRs included. Once the PR is ready for review, the
+  full Bun suite runs too (the suite's own hooks build the image through
+  the Tests stack); a failure triggers exactly one full-suite retry, so a
+  vendor-endpoint hiccup doesn't paint the run red while a real regression
+  still fails twice.
+- **Merge to `main`** (squash-only; direct pushes are blocked by a ruleset
+  that requires the pull request and both checks, administrators included)
+  re-runs hygiene and cuts a Release when `version` in `package.json`
+  moved: the workflow pushes `vX.Y.Z` and `latest` to
+  `ghcr.io/andrielson/rtx-workspace` and creates the matching git tag and
+  GitHub Release. A merge without a version bump publishes nothing, and a
+  failed publish self-heals on the next merge — the git tag is the
+  publication record. Build cost between runs is amortized through registry
+  cache (a `buildcache` tag plus inline cache in the pushed image; PR runs
+  warm the daemon cache from `latest` before the suite builds).
+- `workflow_dispatch` runs hygiene, the suite and — on `main` — the
+  release job manually.
+
+The GHCR package is created **private** by GitHub on the first push; it is
+flipped to public once, manually, in the package settings.
+
 ## Lint, formatting and type checking
 
 Formatting is split between two tools with strict ownership — they never
@@ -287,6 +316,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Tests stack_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — workflows for coding agents (issue tracker, triage labels, domain docs); start at [AGENTS.md](AGENTS.md)
+- `.github/` — the CI workflow: pull-request gates (hygiene, full suite) and the Release publisher
 - `.zcode/` — ZCode agent tooling: the DeepWiki MCP server config and the project skills (content in `.agents/skills/`, symlinks in `.zcode/skills/`)
 
 ## Conventions

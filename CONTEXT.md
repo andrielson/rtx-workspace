@@ -39,3 +39,7 @@ _Avoid_: exceptions, manual installs
 **Image contract**:
 What the workspace image delivers on its own, before the Bootstrap script ever runs: Nix itself (single-user as `ubuntu` under `/nix`), the slim apt runtime baseline, and the sshd/entrypoint/PATH-hook plumbing; the complement of what the first boot installs (the default Nix profile and user state).
 _Avoid_: Dockerfile contract, base image contents
+
+**Release**:
+A versioned publication of the workspace image, identified by one semver `vX.Y.Z` tag shared by the git tag, the GitHub Release and the registry image tag; cut by merging a pull request that moves the version, never assembled by hand.
+_Avoid_: deploy, rollout, version bump
