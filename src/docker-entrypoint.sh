@@ -4,7 +4,7 @@
 set -euo pipefail
 
 wait_for_user_install_url() {
-  local url="${USER_INSTALL_URL:-http://nginx/user-install.sh}"
+  local url="${USER_INSTALL_URL:-https://raw.githubusercontent.com/andrielson/rtx-workspace/refs/heads/main/src/user-install.sh}"
   local attempt
 
   # nginx may still be booting when a fresh stack starts both containers;
@@ -21,7 +21,7 @@ wait_for_user_install_url() {
 
 run_user_install() {
   wait_for_user_install_url
-  curl --fail --silent --show-error --location "${USER_INSTALL_URL:-http://nginx/user-install.sh}" | gosu ubuntu bash
+  curl --fail --silent --show-error --location "${USER_INSTALL_URL:-https://raw.githubusercontent.com/andrielson/rtx-workspace/refs/heads/main/src/user-install.sh}" | gosu ubuntu bash
 }
 
 # group_add decorates only the container's own process tree; sshd rebuilds
