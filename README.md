@@ -204,29 +204,40 @@ and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
 
 ## Continuous integration and releases
 
-GitHub Actions (`.github/workflows/ci.yml`) gates every pull request and
+GitHub Actions (`.github/workflows/ci.yml`) gates pull requests and
 publishes Releases (the reasoning is recorded in
-[ADR 0008](docs/adr/0008-ci-gates-and-ghcr-releases.md)):
+[ADR 0008](docs/adr/0008-ci-gates-and-ghcr-releases.md)). Each job runs
+only when the changed paths concern it: a leading `changes` job diffs the
+event's range and gates the rest. The filtering is deliberately per job —
+the `main` ruleset requires the Hygiene and Test suite checks on every
+pull request, and a workflow-level path filter would leave a skipped
+workflow's checks pending and the PR unmergeable, while a skipped job
+reports success:
 
-- **Pull requests** run the hygiene battery — the same gates as
+- **Pull requests** that touch `src/`, `tests/`, the workflow itself,
+  `package.json` or `bun.lock` run the hygiene battery — the same gates as
   `pre-commit` (Biome, Prettier, `tsc`, ShellCheck, Compose validation) —
   on every event, draft PRs included. Once the PR is ready for review, the
   full Bun suite runs too (the suite's own hooks build the image through
   the Tests stack); a failure triggers exactly one full-suite retry, so a
   vendor-endpoint hiccup doesn't paint the run red while a real regression
-  still fails twice.
+  still fails twice. A pull request that changes none of those paths —
+  documentation, hooks, repository machinery — skips both jobs; the same
+  gates already run locally through `pre-commit`.
 - **Merge to `main`** (squash-only; direct pushes are blocked by a ruleset
   that requires the pull request and both checks, administrators included)
-  re-runs hygiene and cuts a Release when `version` in `package.json`
-  moved: the workflow pushes `vX.Y.Z` and `latest` to
+  re-runs hygiene and cuts a Release when the merge touched the image
+  inputs (`src/`, the workflow, `package.json`) and `version` in
+  `package.json` moved: the workflow pushes `vX.Y.Z` and `latest` to
   `ghcr.io/andrielson/rtx-workspace` and creates the matching git tag and
   GitHub Release. A merge without a version bump publishes nothing, and a
-  failed publish self-heals on the next merge — the git tag is the
-  publication record. Build cost between runs is amortized through registry
-  cache (a `buildcache` tag plus inline cache in the pushed image; PR runs
-  warm the daemon cache from `latest` before the suite builds).
-- `workflow_dispatch` runs hygiene, the suite and — on `main` — the
-  release job manually.
+  failed publish self-heals on the next qualifying merge or a
+  `workflow_dispatch` — the git tag is the publication record. Build cost
+  between runs is amortized through registry cache (a `buildcache` tag
+  plus inline cache in the pushed image; PR runs warm the daemon cache
+  from `latest` before the suite builds).
+- `workflow_dispatch` runs everything — hygiene, the suite and, on `main`,
+  the release job — regardless of paths.
 
 The GHCR package is created **private** by GitHub on the first push; it is
 flipped to public once, manually, in the package settings.
