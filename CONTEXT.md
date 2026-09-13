@@ -1,23 +1,15 @@
 # rtx-workspace
 
-A container-based remote development workspace: one GPU-enabled Linux container the developer SSHes into, plus an nginx sidecar serving first-boot install assets. This context covers how that stack is described and layered.
+A container-based remote development workspace: one GPU-enabled Linux container the developer SSHes into, which fetches first-boot install assets from an nginx sibling. This context covers how the image and its Tests stack are described.
 
 ## Language
 
-**Base compose**:
-The compose file under `src/` that is the single source of truth for the workspace service (everything except GPU reservation), its named `/nix` volume, and the nginx service; every stack derives from it by `extends`.
-_Avoid_: main compose, source-of-truth compose
-
-**Prod overlay**:
-The root compose file; extends the Base compose into the real, long-running stack by adding the GPU reservation, the gateway network, the stable container name, and the SSH port.
-_Avoid_: production compose, docker-compose.prod
-
 **Tests stack**:
-The compose file under `tests/`; extends the Base compose with a throwaway identity — overridden container name, isolated network, fresh volume, dummy environment, throwaway published SSH port — so it can run beside the real stack.
+The compose file under `tests/`; declared in full (no extends) with a throwaway identity — its own project name, container name, project-scoped volume, dummy environment, throwaway published SSH port — so it can run beside any live deployment, and both of its builds use the `src/` context through the tracked `tests/src` symlink.
 _Avoid_: test compose, CI stack
 
 **Web root**:
-The nginx document root (`/usr/share/nginx/html/`) where the Base compose bind-mounts the Bootstrap script and from which workspaces fetch it; the Tests stack bakes the script into a built nginx image instead, since bind sources resolve daemon-side, where the repo's `/nix` volume paths do not exist.
+The nginx document root (`/usr/share/nginx/html/`) from which workspaces fetch the Bootstrap script at first boot; in-repo, the Tests stack's baked nginx image is the only mechanism that populates it (bind sources resolve daemon-side, where the repo's `/nix` volume paths do not exist) — any real deployment provides its own server.
 _Avoid_: static files, www
 
 **Bootstrap script**:

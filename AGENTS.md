@@ -2,17 +2,17 @@
 
 ## Repository
 
-A GPU-capable remote development workspace delivered as a Docker Compose stack: a **workspace** container the developer SSHes into (port 2222 via the Prod overlay), plus an **nginx** sidecar serving the first-boot install assets. Run `bun install` after cloning — it also activates the git hooks.
+A GPU-capable remote development workspace delivered as a Docker image: the **workspace** container the developer SSHes into (`src/Dockerfile` and its runtime). At first boot the entrypoint expects an nginx sibling serving the Bootstrap script; running such a deployment is outside this repository's scope — the repo ships a standalone **Tests stack** that builds and proves the image. Run `bun install` after cloning — it also activates the git hooks.
 
-- `src/` — the image and its runtime: `Dockerfile`, `docker-entrypoint.sh`, `01-home-bash-env.sh`, `sshd_config_ubuntu`, the Base compose, and the Bootstrap script (`user-install.sh`)
-- `tests/` — the Tests compose stack and the Bun test suite
-- `CONTEXT.md` — the project glossary (canonical terms: _Base compose_, _Prod overlay_, _Tests stack_, _Bootstrap script_, _Image contract_, ...); use this vocabulary
+- `src/` — the image and its runtime: `Dockerfile`, `docker-entrypoint.sh`, `01-home-bash-env.sh`, `sshd_config_ubuntu`, and the Bootstrap script (`user-install.sh`)
+- `tests/` — the Tests compose stack and the Bun test suite, plus the tracked `tests/src` symlink both builds use as their context
+- `CONTEXT.md` — the project glossary (canonical terms: _Tests stack_, _Bootstrap script_, _Image contract_, ...); use this vocabulary
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — agent workflow docs (issue tracker, triage labels, domain docs)
 
 ## Architecture boundaries
 
-- The three Compose files layer through service-level `extends:` (ADR 0001): **Base compose** (`src/docker-compose.yml`) is the single source of truth; the root `docker-compose.yml` (**Prod overlay**) and `tests/docker-compose.yml` (**Tests stack**) only extend it. Shared changes go in the Base compose; each overlay adds only what is unique to it.
+- `tests/docker-compose.yml` (**Tests stack**) is standalone — no `extends:`, every service declared in full — and both of its builds share the `src/` context through the tracked `tests/src` symlink; nginx's Dockerfile stays in `tests/`, outside its context (ADR 0007).
 - **Image contract**: the image alone (Dockerfile + entrypoint) delivers the heavy toolchains; everything user-specific is installed on first boot by the Bootstrap script. Decide which side a new tool belongs to before adding it.
 
 ## Testing
@@ -45,4 +45,4 @@ Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agent
 - Whenever information about a third-party project is needed (APIs, CLI, runtime behavior, releases, internals), research it through the `deepwiki` MCP against that project's GitHub repository (e.g., Bun via `oven-sh/bun`). The `deepwiki` skill in `.agents/skills/deepwiki/` describes the workflow.
 - Shell scripts are linted with ShellCheck via `bun run lint:sh`, using the local `shellcheck` binary (see the README prerequisites); `.shellcheckrc` holds the repo-wide ShellCheck policy (bash dialect, enabled optional rules, disabled codes). Formatting goes through Prettier with `prettier-plugin-sh`, which embeds the shfmt engine — no host `shfmt` binary is needed — via `bun run format` / `bun run format:check`, with the shell policy (indent, `switchCaseIndent`, `spaceRedirects`, `binaryNextLine`) living in `.prettierrc`. The pre-commit hook runs ShellCheck on staged shell files; their formatting rides the same lint-staged Prettier task as every other Prettier-owned file.
 - In shell scripts, prefer single quotes for literal strings without expansions; switch to double quotes as soon as the string contains a variable or command substitution (ShellCheck's SC2016 flags the mistake). prettier-plugin-sh preserves quote style, so this is an authoring convention enforced by review, not by tooling.
-- The Compose files (Base compose, Prod overlay, Tests stack) are validated with `bun run lint:compose`, which runs `docker compose config --quiet` over all three files — checking the compose-spec schema and the `extends:` layering. The pre-commit hook runs it when staged files include YAML.
+- The Compose file (Tests stack) is validated with `bun run lint:compose`, which runs `docker compose config --quiet` over it — checking the compose-spec schema. The pre-commit hook runs it when staged files include YAML.

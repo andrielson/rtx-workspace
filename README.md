@@ -1,18 +1,20 @@
 # rtx-workspace
 
-A GPU-capable remote development workspace delivered as a Docker Compose
-stack: one Linux container you SSH into for day-to-day work (the
-**workspace**), plus an **nginx** sidecar that serves the first-boot install
-assets. The image bakes Nix — the package manager — and nothing else
-tool-wise: every toolchain and everyday utility arrives on first boot when the
-Bootstrap script installs the default Nix profile, so a fresh `/nix` volume
-becomes a fully equipped environment on its own.
+A GPU-capable remote development workspace delivered as a Docker image: one
+Linux container you SSH into for day-to-day work (the **workspace**). The
+image bakes Nix — the package manager — and nothing else tool-wise: every
+toolchain and everyday utility arrives on first boot when the Bootstrap
+script installs the default Nix profile, so a fresh `/nix` volume becomes a
+fully equipped environment on its own. At first boot the entrypoint waits
+for an nginx sibling serving that Bootstrap script; running a deployment is
+outside this repository's scope — the Tests stack below builds and proves
+the image.
 
 ## Prerequisites
 
 - **Docker** with the **Compose** (`docker compose`, 2.24+ for the optional
-  env files) and **Buildx** plugins — the stack, the tests harness and the
-  image builds all go through them, and the Dockerfile's
+  env files) and **Buildx** plugins — the Tests stack, the test harness and
+  the image builds all go through them, and the Dockerfile's
   `syntax=docker/dockerfile:1` directive requires BuildKit.
 - **Bun** — runs the test suite, the git hooks, and every
   lint/format/type-check script; `bun install` also activates the hooks.
@@ -26,16 +28,17 @@ becomes a fully equipped environment on its own.
   stand up a loopback HTTPS stand-in for a vendor endpoint (throwaway
   self-signed certificate) and drive the real curl wrapper against it.
 
-## How the stack is layered
+## Architecture
 
-The Compose files are layered through service-level `extends:` (the reasoning
-is recorded in [ADR 0001](docs/adr/0001-extends-based-compose-layering.md)):
-
-| File                        | Role                                                                                                                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/docker-compose.yml`    | **Base compose** — the single source of truth: the `workspace` service, its named `nix` volume, and the `nginx` service every stack needs                                                                               |
-| `docker-compose.yml` (root) | **Prod overlay** — the real, long-running stack: adds the NVIDIA GPU reservation, the external `gateway` network, the stable `workspace` container name, and publishes SSH on port 2222                                 |
-| `tests/docker-compose.yml`  | **Tests stack** — a throwaway sibling of the real stack (own container name, project-scoped volume, dummy environment, throwaway SSH port, self-built nginx image) so tests run beside a live stack without touching it |
+The repository's product is the workspace image; nothing is layered through
+`extends:` anymore. `tests/docker-compose.yml` — the **Tests stack** —
+declares every service in full with a throwaway identity (own project name,
+container name, project-scoped volume, dummy environment, throwaway SSH
+port) so tests run beside any live deployment without touching it. Both of
+its builds use the `src/` context through the tracked `tests/src` symlink;
+the nginx Dockerfile stays in `tests/`, outside its context (the reasoning
+is recorded in
+[ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
 
 ## The workspace image
 
@@ -88,8 +91,8 @@ At every boot it first runs `home-env-mirror` — the **Environment mirror** —
 regenerating `~/.bash_env` (the **User environment file**) as a one-way
 projection of the container environment, so a container recreated with new
 or removed variables stays projected onto every shell surface; personal
-variables belong in `.env.service`, the Compose env file that feeds the
-container environment. On first boot the entrypoint then waits until nginx
+variables belong in the Compose env file of whatever stack runs the image.
+On first boot the entrypoint then waits until nginx
 is reachable and pipes `src/user-install.sh` — the **Bootstrap script** —
 through `gosu` as `ubuntu`. The bootstrap runs only while the volume is
 fresh (once OpenCode is present, subsequent boots skip straight to sshd),
@@ -116,40 +119,16 @@ profile tracks, and both self-update (`bun upgrade`, `rustup update`).
 
 ## Getting started
 
-Besides the tools listed under [Prerequisites](#prerequisites), you need a
-Docker socket at `/var/run/docker.sock` and — for the GPU reservation — an
-NVIDIA GPU with the NVIDIA container toolkit configured.
+Build the image:
 
-1. Configure the service environment from the example (gitignored, holds
-   secrets):
+```bash
+docker build --tag rtx-workspace:latest src
+```
 
-   ```bash
-   cp .env.service.example .env.service
-   # then fill in SSH_AUTHORIZED_KEY, GH_TOKEN, and the API keys
-   ```
-
-   The stack starts even without this file (it is declared `required: false`),
-   but without `SSH_AUTHORIZED_KEY` nobody can SSH into the workspace.
-
-2. Create the external network the Prod overlay attaches to:
-
-   ```bash
-   docker network create gateway
-   ```
-
-3. Bring the stack up from the repo root (the Prod overlay is the default
-   compose file there). `--wait` gates on both services being healthy:
-
-   ```bash
-   docker compose up --detach --wait
-   ```
-
-4. SSH in. First boot takes a while: the entrypoint runs the full bootstrap
-   before sshd answers.
-
-   ```bash
-   ssh -p 2222 ubuntu@localhost
-   ```
+Running a deployment is out of the repository's scope. One runtime fact
+matters when wiring your own: on first boot the entrypoint waits for an
+nginx sibling serving the Bootstrap script before provisioning starts
+(`SKIP_USER_INSTALL=1` skips that wait).
 
 ## Testing
 
@@ -166,12 +145,14 @@ The Docker file (`tests/docker.test.ts`) needs a running Docker daemon,
 container can reach the host daemon) and `openssh-client` on the test host
 (see [Prerequisites](#prerequisites)). Global hooks build the image through
 the Tests stack (`build --pull`, so expect a slow first run) and tear the
-whole project down afterwards. The Tests stack's nginx builds from
-`tests/Dockerfile.nginx` (the repository root as context, filtered by the
-root `.dockerignore`) rather than bind-mounting the Bootstrap script — bind
-sources resolve on the host, where the paths inside a workspace's `/nix`
-volume do not exist — so the suite also runs from inside a workspace (see
-[ADR 0004](docs/adr/0004-baked-nginx-bootstrap-script-for-tests-stack.md)).
+whole project down afterwards. Both builds go through the tracked
+`tests/src` symlink: nginx builds from `tests/Dockerfile.nginx` with the
+`src/` context (the Dockerfile outside it), baking the Bootstrap script
+into the image rather than bind-mounting it — bind sources resolve on the
+host, where the paths inside a workspace's `/nix` volume do not exist — so
+the suite also runs from inside a workspace (see
+[ADR 0004](docs/adr/0004-baked-nginx-bootstrap-script-for-tests-stack.md)
+and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
 
 - `describe("Dockerfile")` verifies the **Image contract**: what the image
   alone delivers before the Bootstrap script ever runs. A one-off workspace
@@ -240,14 +221,14 @@ bun run lint:fix     # Biome check --write
 bun run format       # Prettier --write (markdown/yaml/shell/Dockerfile)
 bun run format:check # Prettier --check, no changes applied
 bun run lint:sh      # ShellCheck over the first-party scripts
-bun run lint:compose # docker compose config over all three Compose files
+bun run lint:compose # docker compose config over the Tests compose file
 bun run typecheck    # tsc --noEmit
 ```
 
 `.shellcheckrc` holds the ShellCheck policy (bash dialect, optional rules
 enabled, known-noise codes disabled). The Compose validation checks the
-compose-spec schema and the `extends` layering; the gitignored env files
-are declared `required: false`, so it also works on fresh clones.
+compose-spec schema; the gitignored env file is declared `required: false`,
+so it also works on fresh clones.
 
 ## Git hooks (Husky)
 
@@ -301,9 +282,9 @@ The repository versions ZCode agent tooling alongside the stack itself:
 
 ## Repository map
 
-- `src/` — the main source: Dockerfile, entrypoint, the Environment mirror and Env loader, sshd config, Base compose, and the Bootstrap script (`user-install.sh`) nginx serves
-- `tests/` — the Tests stack and the Bun test suite
-- `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Base compose_, _Bootstrap script_, _Image contract_)
+- `src/` — the main source: Dockerfile, entrypoint, the Environment mirror and Env loader, sshd config, and the Bootstrap script (`user-install.sh`) nginx serves
+- `tests/` — the Tests stack and the Bun test suite, plus the tracked `tests/src` symlink both builds use as their context
+- `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Tests stack_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — workflows for coding agents (issue tracker, triage labels, domain docs); start at [AGENTS.md](AGENTS.md)
 - `.zcode/` — ZCode agent tooling: the DeepWiki MCP server config and the project skills (content in `.agents/skills/`, symlinks in `.zcode/skills/`)
@@ -314,8 +295,9 @@ The repository versions ZCode agent tooling alongside the stack itself:
 - Commands use long options wherever the tool provides them (e.g.
   `docker compose --file ... --project-name ...`).
 - Compose files use the long syntax for volumes and ports.
-- Compose files layer through service-level `extends:`
-  ([ADR 0001](docs/adr/0001-extends-based-compose-layering.md)).
+- The Tests compose file is standalone (no `extends:`), building both
+  images from the `src/` context through the tracked `tests/src` symlink
+  ([ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
 - Formatting is split with strict ownership: Biome enforces lint,
   formatting and import ordering for the TS family; Prettier formats
   markdown, YAML, shell and Dockerfile. `tsc --noEmit` checks types. Git
