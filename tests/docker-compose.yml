@@ -34,6 +34,11 @@ services:
     # the signing opt-out; with the stack's token-less env the Bootstrap's
     # signing setup never runs either way.
     environment:
+      # The Tests stack pins the bootstrap fetch to its own nginx — the Web
+      # root this tree built — instead of the image default (the repo's main
+      # branch on GitHub), so the suite provisions from and proves the
+      # working tree's script, never the last merge.
+      USER_INSTALL_URL: http://nginx/user-install.sh
       SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
       MIRROR_PROBE: ${MIRROR_PROBE:-}
       SKIP_GIT_USER_SIGNING_KEY: ${SKIP_GIT_USER_SIGNING_KEY:-}

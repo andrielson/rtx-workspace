@@ -95,39 +95,72 @@ variables belong in the Compose env file of whatever stack runs the image.
 On first boot the entrypoint then waits until nginx
 is reachable and pipes `src/user-install.sh` — the **Bootstrap script** —
 through `gosu` as `ubuntu`. The bootstrap runs only while the volume is
-fresh (once OpenCode is present, subsequent boots skip straight to sshd),
-and `SKIP_USER_INSTALL=1` skips provisioning on any boot — the escape hatch
-for bringing a container up without waiting on the bootstrap or its nginx
-dependency. It configures git against GitHub through `GH_TOKEN`, giving
-profiles without a public name or email the login and the ID-based noreply
-address as fallbacks, and issues the git signing key: with the token
-present and `SKIP_GIT_USER_SIGNING_KEY` not `1`, one ed25519 pair per
-volume under `~/.ssh/git_user_signing_key(.pub)` is generated, registered
-with the authenticated account as a GitHub signing key
-(`rtx-workspace: <hostname>`) so pushed commits can show the Verified
+fresh: once bun is present, subsequent boots skip straight to sshd. Bun is
+the default bootstrap sentinel because it is the last bundle the bootstrap
+runs (see the bundle table below), so a bundle that failed earlier leaves
+the sentinel missing and the next boot re-provisions; the
+`ENTRYPOINT_USER_INSTALL_CHECK` variable overrides the sentinel command for
+deployments whose essential command differs, and a value containing
+whitespace aborts the boot with an error rather than silently
+re-provisioning on every boot. `SKIP_USER_INSTALL=1` skips provisioning on
+any boot — the escape hatch for bringing a container up without waiting on
+the bootstrap or its nginx dependency. The bootstrap configures git against
+GitHub through `GH_TOKEN`, giving profiles without a public name or email
+the login and the ID-based noreply address as fallbacks, and issues the git
+signing key: with the token present and `SKIP_GIT_USER_SIGNING_KEY` not
+`1`, one ed25519 pair per volume under `~/.ssh/git_user_signing_key(.pub)`
+is generated, registered with the authenticated account as a GitHub signing
+key (`rtx-workspace: <hostname>`) so pushed commits can show the Verified
 badge, and wired into the local commit/tag signing and verification
 config — a token that cannot manage signing keys answers 403 and the
 setup skips with a log line, and every fresh volume registers one more
 key on the account (GitHub caps none; removing stale ones is manual — the
 reasoning is recorded in
 [ADR 0009](docs/adr/0009-bootstrap-issued-git-signing-keys.md)). It
-installs the public key from `SSH_AUTHORIZED_KEY`. Its install half is one
-unattended `nix profile add` of
-`nixpkgs#` packages (the flake-registry shorthand resolves to
-nixpkgs-unstable): the **default profile** carries SDKMAN's set with GraalVM
-CE (Gradle, Kotlin, Maven, Quarkus, Scala), Go, PHP + Composer, gh, git, yq
-(under the nixpkgs attr `yq-go`), shellcheck, shfmt, the docker CLI (compose
-plugin included), fnm, and the everyday utilities — all free-licensed, so
-the install evaluates pure. Five **carve-outs** stay outside the read-only
-store: uv through its official installer (the `UV_*` knobs are baked into
-the image, with `UV_TORCH_BACKEND=cpu` as the default — CPU torch wheels
-suit the common GPU-less case; override the env for CUDA), the
-self-updating agent CLIs Claude Code and OpenCode through their vendor
-scripts (they rewrite their own binary), and Node via fnm — `fnm install
---lts` with `lts-latest` as the default, wired interactive-only into
-`~/.bashrc` as nvm was. Bun and Rust round out the carve-outs through their
-vendor installers (bun.sh, rustup): both release faster than a pinned
-profile tracks, and both self-update (`bun upgrade`, `rustup update`).
+installs the public key from `SSH_AUTHORIZED_KEY`.
+
+Its install half is organized as **bundles** — named groups of packages and
+setup steps, each toggled off by its `SKIP_USER_INSTALL_<NAME>=1` variable
+(exactly `1`; `0`, empty and unset all run the bundle). The Nix-carrying
+bundles contribute to one unattended `nix profile add` of the union of the
+enabled bundles' `nixpkgs#` packages (the flake-registry shorthand resolves
+to nixpkgs-unstable; all free-licensed, so the evaluation stays pure) — one
+evaluation, one atomic **default profile** generation, and a
+partial-failure re-run that finds a package already installed just warns
+and moves on. The bundles (the Nix-carrying rows join that one profile
+union; each bundle's own steps run in the order listed, ending with bun —
+the default sentinel's own bundle):
+
+| Bundle     | Skip variable                  | Delivers                                                                                                                                                                                                |
+| ---------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `linux`    | — (always on)                  | the everyday utilities (ripgrep, jq, yq under the attr `yq-go`, shellcheck, shfmt, tmux, ffmpeg, …) plus the git/gh configuration, SSH-key setup and bash-completion wiring every other bundle leans on |
+| `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                |
+| `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                      |
+| `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle, Kotlin, Maven, Quarkus, Scala                                                                                                                                                       |
+| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                      |
+| `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                          |
+| `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                     |
+| `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                               |
+| `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                             |
+| `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                |
+| `bun`      | `SKIP_USER_INSTALL_BUN=1`      | Bun                                                                                                                                                                                                     |
+
+Bundle variables shape only the provisioning run: on an
+already-bootstrapped volume they neither install what an earlier
+bootstrapped volume skipped nor remove what it installed — provisioning
+runs only while the sentinel command is missing, so a fresh `/nix` volume
+is what a changed bundle configuration needs.
+
+Five **carve-outs** stay outside the read-only Nix store, each through its
+bundle's vendor installer: uv (the `python` bundle — the `UV_*` knobs are
+baked into the image, with `UV_TORCH_BACKEND=cpu` as the default — CPU
+torch wheels suit the common GPU-less case; override the env for CUDA), the
+self-updating agent CLIs Claude Code and OpenCode (`claude`, `opencode` —
+they rewrite their own binary), Node via fnm (`node`: `fnm install --lts`
+with `lts-latest` as the default, wired interactive-only into `~/.bashrc`
+as nvm was), and Bun and Rust (`bun`, `rust`: bun.sh and rustup both
+release faster than a pinned profile tracks, and both self-update —
+`bun upgrade`, `rustup update`).
 
 ## Getting started
 
@@ -185,7 +218,11 @@ and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
   real account and stays a manual check — see
   [ADR 0009](docs/adr/0009-bootstrap-issued-git-signing-keys.md)), and a
   container restart proves the already-bootstrapped
-  detection skips provisioning on a second boot.
+  detection skips provisioning on a second boot. Its last block proves the
+  bundle gates end to end: a one-off container bootstraps a fresh volume
+  with `SKIP_USER_INSTALL_JAVA=1` and must land every other bundle (golang
+  through the same profile union, bun as the sentinel's own command) while
+  the skipped bundle's tools stay absent.
 - `describe("SSH surfaces")` (inside `user-install`) proves the remaining
   shell surfaces on the real sshd: the suite generates a throwaway keypair,
   injects the public half through the same `SSH_AUTHORIZED_KEY` env var
@@ -216,7 +253,10 @@ and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
   transient 503 is retried and the fetch still succeeds, a permanent 404
   fails on the first attempt, and the wrapper stays the only curl
   invocation in the script — so first boot keeps riding out vendor-endpoint
-  flakiness instead of dying to it.
+  flakiness instead of dying to it. The bundle gate (`bundle_enabled`) is
+  lifted the same way and pinned to its exactly-`1` skip contract: unset,
+  `0`, empty and any other value run the bundle, only `1` skips it, and
+  another bundle's skip variable never leaks in.
 
 ## Continuous integration and releases
 

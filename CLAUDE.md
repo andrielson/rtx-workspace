@@ -19,7 +19,7 @@ A GPU-capable remote development workspace delivered as a Docker image: the **wo
 
 ## Testing
 
-`bun test` runs both test files. `tests/docker.test.ts` needs a running Docker daemon and `/var/run/docker.sock`; global hooks build the image through the Tests stack (`build --pull`, so the first run is slow) and tear the project down afterwards. `describe("Dockerfile")` asserts the Image contract; `describe("user-install")` exercises the first-boot flow end to end. `tests/user-install.test.ts` is Docker-free: it unit-tests the Bootstrap script's shared curl wrapper against a loopback HTTPS stand-in for a vendor endpoint (host `openssl` and `curl` required).
+`bun test` runs both test files. `tests/docker.test.ts` needs a running Docker daemon and `/var/run/docker.sock`; global hooks build the image through the Tests stack (`build --pull`, so the first run is slow) and tear the project down afterwards. `describe("Dockerfile")` asserts the Image contract; `describe("user-install")` exercises the first-boot flow end to end, including the bundle skip variables. `tests/user-install.test.ts` is Docker-free: it unit-tests the Bootstrap script's shared curl wrapper against a loopback HTTPS stand-in for a vendor endpoint (host `openssl` and `curl` required), and its bundle gate's exactly-`1` skip contract.
 
 ## Agent skills
 

@@ -8,16 +8,19 @@ import { join } from 'node:path'
 // The unit complement to the Docker suite's end-to-end user-install block:
 // the Bootstrap script's shared curl wrapper is the single funnel for every
 // vendor-installer fetch, and its retry contract is checkable without a
-// boot. The script cannot be sourced (its tail provisions a home
-// directory), so the wrapper is lifted out of the script text by name into
-// a standalone file that runs it with the bootstrap's own error semantics.
+// boot — as are the bundle gate's exactly-'1' skip contract and the pure
+// helpers behind the git-signing setup. The script cannot be sourced (its
+// tail provisions a home directory), so each is lifted out of the script
+// text by name into standalone files that run them with the bootstrap's own
+// error semantics.
 describe('user-install', () => {
   const script = readFileSync(join(import.meta.dir, '..', 'src', 'user-install.sh'), 'utf8')
 
-  // Both lifts anchor on the definition line and the column-0 closing
+  // All lifts anchor on the definition line and the column-0 closing
   // brace, so Prettier wrapping a body into multiple lines stays harmless.
   const liftHelper = (name: string) => script.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'm'))?.[0] ?? ''
   const wrapper = liftHelper('_curl')
+  const gate = liftHelper('bundle_enabled')
 
   // The pure helpers behind the git-signing setup — the identity
   // fallbacks, the allowed_signers principal, the enable predicate —
@@ -30,10 +33,12 @@ describe('user-install', () => {
   let certPath = ''
   let keyPath = ''
   let wrapperPath = ''
+  let gatePath = ''
   let helpersPath = ''
 
   beforeAll(async () => {
     expect(wrapper, '_curl wrapper not found in user-install.sh — renamed?').not.toBe('')
+    expect(gate, 'bundle_enabled gate not found in user-install.sh — renamed?').not.toBe('')
     workDir = mkdtempSync(join(tmpdir(), 'rtx-workspace-user-install-'))
 
     // The wrapper pins --proto '=https', so the stand-in vendor endpoint
@@ -47,6 +52,9 @@ describe('user-install', () => {
 
     wrapperPath = join(workDir, 'wrapper.sh')
     writeFileSync(wrapperPath, `set -euo pipefail\n${wrapper}\n_curl "$@"\n`)
+
+    gatePath = join(workDir, 'gate.sh')
+    writeFileSync(gatePath, `set -euo pipefail\n${gate}\nbundle_enabled "$@"\n`)
 
     expect(helperNames.map(liftHelper), 'a lifted helper is missing from user-install.sh — renamed?').not.toContain('')
     helpersPath = join(workDir, 'helpers.sh')
@@ -119,6 +127,39 @@ describe('user-install', () => {
       expect(invocation).toContain('--retry')
       expect(invocation).toContain('--retry-connrefused')
       expect(invocation).not.toContain('--retry-all-errors')
+    })
+  })
+
+  // The gate decides every bundle's participation; its contract mirrors the
+  // entrypoint's global SKIP_USER_INSTALL kill-switch (exactly '1' skips,
+  // anything else — '0', empty, unset — runs). DEMO is a throwaway bundle
+  // name: the gate reads only its own SKIP_USER_INSTALL_<NAME> variable.
+  describe('bundle gate', () => {
+    const runGate = async (demoValue: string | undefined, extra: Record<string, string> = {}) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...extra }
+      if (demoValue === undefined) delete childEnv.SKIP_USER_INSTALL_DEMO
+      else childEnv.SKIP_USER_INSTALL_DEMO = demoValue
+
+      const proc = await $`bash ${gatePath} DEMO`.env(childEnv).nothrow().quiet()
+      return proc.exitCode
+    }
+
+    test('is enabled when its skip variable is unset', async () => {
+      expect(await runGate(undefined)).toBe(0)
+    })
+
+    test("treats every value other than exactly '1' as enabled", async () => {
+      expect(await runGate('0')).toBe(0)
+      expect(await runGate('')).toBe(0)
+      expect(await runGate('true')).toBe(0)
+    })
+
+    test("skips only on exactly '1'", async () => {
+      expect(await runGate('1')).toBe(1)
+    })
+
+    test('ignores another bundle’s skip variable', async () => {
+      expect(await runGate(undefined, { SKIP_USER_INSTALL_OTHER: '1' })).toBe(0)
     })
   })
 
