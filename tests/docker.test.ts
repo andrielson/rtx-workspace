@@ -620,8 +620,9 @@ describe('user-install', () => {
 
   describe('second boot', () => {
     test('a restart skips provisioning and comes back with tools intact', async () => {
-      // The entrypoint's already-bootstrapped detection (opencode on PATH)
-      // must skip the Bootstrap script when the volume already carries it.
+      // The entrypoint's already-bootstrapped detection (bun on PATH — the
+      // default ENTRYPOINT_USER_INSTALL_CHECK sentinel) must skip the
+      // Bootstrap script when the volume already carries it.
       // A restart re-runs the entrypoint — the second boot — without
       // touching the container (the recreate-with-kept-volume cycle is the
       // recreate block below).
@@ -693,5 +694,70 @@ describe('user-install', () => {
       // …and a representative tool runs.
       expect(await execBare('java --version')).toMatch(/GraalVM CE/)
     }, 300_000)
+  })
+
+  // The bundle gates end to end: a fresh volume provisioned with one
+  // bundle's skip variable set must land every other bundle and leave the
+  // skipped bundle's tools absent. Java is the skipped one — the heaviest
+  // profile slice, so the boot also shows the skip paying for itself — and
+  // golang and bun stand in for what must survive it: a sibling profile
+  // bundle (the union installed the enabled packages anyway) and the last
+  // vendor bundle (the tail completed, sentinel included).
+  describe('bundle skips', () => {
+    const skipContainer = 'workspace-test-skip-bundle'
+
+    // The bare surface bound to the one-off container below, in the shape
+    // of execBare (which is bound to the stack's own container_name).
+    const execSkip = async (script: string) =>
+      $`docker exec ${skipContainer} bash -c ${script}`.text().then((stdout) => stdout.trim())
+
+    test('SKIP_USER_INSTALL_JAVA=1 provisions the rest without the java bundle', async () => {
+      // The project volume already carries a bootstrapped profile from the
+      // blocks above, and the bundle variables shape provisioning only —
+      // they never remove from a provisioned volume. So this last block
+      // resets the whole project (volumes included) before its one-off
+      // boot; nothing after it depends on the torn-down state.
+      await $`${compose} down --volumes --remove-orphans`.env(env).quiet()
+
+      // compose run (no --no-deps): nginx starts as the run's dependency
+      // and serves the Web root this tree built, the one this boot fetches
+      // the Bootstrap script from. --env injects the skip variable into
+      // the one-off's environment. Defensive teardown first: a failed
+      // prior run may have left the container behind.
+      await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
+      await $`${compose} run --detach --name ${skipContainer} --env SKIP_USER_INSTALL_JAVA=1 workspace`.env(env).quiet()
+
+      try {
+        // Provisioning gates sshd (the entrypoint execs it only once the
+        // bootstrap finishes), so sshd answering inside the container is
+        // itself the provisioning-done probe — the same probe the
+        // healthcheck uses (bash has no long form for -c; /dev/tcp has no
+        // long form at all). nothrow() resolves the exit code instead of
+        // throwing on the failed probes that make up the polling.
+        const probe = 'exec 3<>/dev/tcp/127.0.0.1/22'
+        const probeOk = async () =>
+          (await $`docker exec ${skipContainer} bash -c ${probe}`.nothrow().quiet()).exitCode === 0
+        const deadline = Date.now() + 900_000
+        while (!(await probeOk())) {
+          if (Date.now() > deadline) throw new Error(`sshd never came up in ${skipContainer}`)
+          await Bun.sleep(1_000)
+        }
+
+        // The bootstrap did run — the marker, not the global skip — and it
+        // said so about the skipped bundle, under the exact variable name.
+        const logs = await $`docker logs ${skipContainer}`.text()
+        expect(logs).toContain(bootstrapMarker)
+        expect(logs).toContain('Skipping the JAVA bundle (SKIP_USER_INSTALL_JAVA=1).')
+
+        // …java never landed, while the enabled sibling bundle's packages
+        // (golang, through the same profile union) and the final vendor
+        // bundle (bun, the default sentinel's own command) did.
+        expect(await execSkip('command -v java || true')).toBe('')
+        expect(await execSkip('go version')).toMatch(/^go version go\d+\.\d+/)
+        expect(await execSkip('bun --version')).toMatch(/^\d+\.\d+/)
+      } finally {
+        await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
+      }
+    }, 960_000)
   })
 })

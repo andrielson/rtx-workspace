@@ -61,15 +61,31 @@ main() {
     exit 1
   fi
 
+  local user_install_check
+
   ensure_docker_socket_group
   mirror_user_environment
+
+  # The bootstrap sentinel: the command whose presence marks the volume as
+  # already provisioned. Defaults to bun — the last bundle the Bootstrap
+  # script runs — so a failed bundle before it leaves the sentinel missing
+  # and the next boot re-runs the bootstrap; ENTRYPOINT_USER_INSTALL_CHECK
+  # overrides it for deployments whose essential command differs. A value
+  # containing whitespace is a typo that could never resolve and would
+  # silently re-provision on every boot — validated on every boot, not just
+  # provisioning ones, so it cannot lurk unnoticed behind the kill-switch.
+  user_install_check="${ENTRYPOINT_USER_INSTALL_CHECK:-bun}"
+  if [[ "${user_install_check}" =~ [[:space:]] ]]; then
+    echo "ENTRYPOINT_USER_INSTALL_CHECK must be a single command name, got '${user_install_check}'." >&2
+    exit 1
+  fi
 
   # SKIP_USER_INSTALL=1 skips first-boot provisioning on any boot — the
   # escape hatch for coming up without the bootstrap (and its nginx
   # dependency). Exactly '1': anything else, including '0' or empty, boots
   # as usual.
   if [[ "${SKIP_USER_INSTALL:-}" != '1' ]]; then
-    command -v opencode > /dev/null || run_user_install
+    command -v "${user_install_check}" > /dev/null || run_user_install
   fi
 
   # sshd has no long options; -D stays in the foreground, -e logs to stderr,

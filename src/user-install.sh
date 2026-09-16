@@ -229,51 +229,115 @@ setup_ssh() {
   chmod --verbose 600 "${SSH_AUTHORIZED_KEYS_FILE}"
 }
 
+# A bundle is enabled unless its SKIP_USER_INSTALL_<NAME> variable holds
+# exactly '1' — the same exactly-'1' contract as the entrypoint's global
+# SKIP_USER_INSTALL kill-switch, where '0', empty, unset and any other
+# value boot as usual. The name arrives uppercase so it doubles as the
+# variable suffix. SC2310: the gate is always invoked in a condition
+# context, which disables set -e inside it — nothing to mask, since the
+# single comparison's exit status is the answer itself, which is why every
+# call site carries the same inline disable.
+bundle_enabled() {
+  local skip_variable="SKIP_USER_INSTALL_${1}"
+
+  [[ "${!skip_variable:-}" != '1' ]]
+}
+
+# The skip line every bundle's omission prints — under the exact variable
+# name an operator would set or unset, so the omission stays visible in the
+# boot log whether the bundle carries vendor steps or profile packages.
+log_bundle_skipped() {
+  _log "Skipping the ${1} bundle (SKIP_USER_INSTALL_${1}=1)."
+}
+
+# Runs one bundle's steps unless its skip variable holds '1'.
+run_bundle() {
+  local bundle="${1}"
+  shift
+
+  # shellcheck disable=SC2310
+  if ! bundle_enabled "${bundle}"; then
+    log_bundle_skipped "${bundle}"
+    return 0
+  fi
+
+  "${@}"
+}
+
+# Appends one bundle's packages to the install_nix_profile union, unless
+# its skip variable holds '1'. Reaches the union array through bash's
+# dynamic scoping: packages is local to install_nix_profile, the only
+# caller.
+bundle_packages() {
+  local bundle="${1}"
+  shift
+
+  # shellcheck disable=SC2310
+  if ! bundle_enabled "${bundle}"; then
+    log_bundle_skipped "${bundle}"
+    return 0
+  fi
+
+  packages+=("${@}")
+}
+
 install_nix_profile() {
   _log 'Installing the default Nix profile...'
 
-  # One unattended install of every stable toolchain and everyday utility,
-  # all free-licensed so the evaluation stays pure. yq rides under yq-go:
-  # nixpkgs' top-level yq is the Python one. git lands here too — the slim
-  # image bakes none, and setup_git below needs it. curl and wget land for
-  # newer versions than apt carries, the profile bin shadowing apt's copies
-  # once installed (apt's curl stays regardless: the entrypoint fetches this
+  # The profile lands as one unattended `nix profile add` of the union of
+  # every enabled bundle's packages: one evaluation, one atomic profile
+  # generation, and a partial-failure re-run that finds a package already
+  # installed just warns and moves on (the add is idempotent). All
+  # free-licensed, so the evaluation stays pure. yq rides under yq-go:
+  # nixpkgs' top-level yq is the Python one. curl and wget land for newer
+  # versions than apt carries, the profile bin shadowing apt's copies once
+  # installed (apt's curl stays regardless: the entrypoint fetches this
   # script before any profile exists). unzip serves the vendor installers
-  # below (bun's unpacks its archive). The profile bin is on PATH from the
-  # image ENV hook, so every command resolves the moment this lands.
-  nix profile add \
-    nixpkgs#bash-completion \
-    nixpkgs#brotli \
-    nixpkgs#bubblewrap \
-    nixpkgs#curl \
-    nixpkgs#docker-client \
-    nixpkgs#ffmpeg \
-    nixpkgs#fnm \
-    nixpkgs#gh \
-    nixpkgs#git \
-    nixpkgs#go \
+  # (bun's unpacks its archive). The profile bin is on PATH from the image
+  # ENV hook, so every command resolves the moment this lands.
+  local packages=()
+
+  # linux — the always-on bundle, with no skip variable: every other bundle
+  # leans on it (curl for the vendor installers, git and gh for setup_git,
+  # unzip for bun's archive), and its steps wire the interactive shell and
+  # the SSH surface below.
+  packages+=(
+    nixpkgs#bash-completion
+    nixpkgs#brotli
+    nixpkgs#bubblewrap
+    nixpkgs#curl
+    nixpkgs#ffmpeg
+    nixpkgs#gh
+    nixpkgs#git
+    nixpkgs#htop
+    nixpkgs#jq
+    nixpkgs#lz4
+    nixpkgs#nano
+    nixpkgs#ripgrep
+    nixpkgs#rsync
+    nixpkgs#shellcheck
+    nixpkgs#shfmt
+    nixpkgs#tmux
+    nixpkgs#unzip
+    nixpkgs#wget
+    nixpkgs#yq-go
+    nixpkgs#zip
+    nixpkgs#zstd
+  )
+
+  bundle_packages DOCKER nixpkgs#docker-client
+  bundle_packages GOLANG nixpkgs#go
+  bundle_packages JAVA \
     nixpkgs#graalvmPackages.graalvm-ce \
     nixpkgs#gradle \
-    nixpkgs#htop \
-    nixpkgs#jq \
     nixpkgs#kotlin \
-    nixpkgs#lz4 \
     nixpkgs#maven \
-    nixpkgs#nano \
-    nixpkgs#php \
-    nixpkgs#phpPackages.composer \
     nixpkgs#quarkus \
-    nixpkgs#ripgrep \
-    nixpkgs#rsync \
-    nixpkgs#scala \
-    nixpkgs#shellcheck \
-    nixpkgs#shfmt \
-    nixpkgs#tmux \
-    nixpkgs#unzip \
-    nixpkgs#wget \
-    nixpkgs#yq-go \
-    nixpkgs#zip \
-    nixpkgs#zstd
+    nixpkgs#scala
+  bundle_packages NODE nixpkgs#fnm
+  bundle_packages PHP nixpkgs#php nixpkgs#phpPackages.composer
+
+  nix profile add "${packages[@]}"
 }
 
 setup_completions() {
@@ -302,15 +366,12 @@ install_rustup() {
   _curl https://sh.rustup.rs | bash -s -- --no-modify-path --profile default -y
 }
 
-install_uv() {
-  _log 'Installing UV...'
+install_python() {
+  _log 'Installing uv...'
   _curl https://astral.sh/uv/install.sh | bash
 
   _log 'Installing Python'
   uv python install --default
-
-  _log 'Installing graphifyy...'
-  uv tool install graphifyy
 
   _log 'Installing ruff...'
   uv tool install ruff
@@ -355,17 +416,28 @@ setup_node() {
   node --version
 }
 
-install_everything() {
+install_bundles() {
   install_nix_profile
+
+  # The linux bundle's setup steps, always on like its packages: completions
+  # for the interactive shell, git and gh configured against GitHub, the SSH
+  # surface. They precede the vendor bundles because nothing down the line
+  # depends on those, while setup_git needs the just-landed profile.
   setup_completions
-  install_bun
-  install_rustup
-  install_uv
-  install_claude_code
-  install_opencode
-  setup_node
+  setup_git
+  setup_ssh
+
+  # The vendor bundles, in a fixed order that ends with bun: the entrypoint
+  # names bun as its default bootstrap sentinel
+  # (ENTRYPOINT_USER_INSTALL_CHECK), so any earlier bundle's failure leaves
+  # the sentinel missing and the next boot re-runs the bootstrap instead of
+  # coming up silently incomplete.
+  run_bundle PYTHON install_python
+  run_bundle RUST install_rustup
+  run_bundle CLAUDE install_claude_code
+  run_bundle OPENCODE install_opencode
+  run_bundle NODE setup_node
+  run_bundle BUN install_bun
 }
 
-install_everything
-setup_git
-setup_ssh
+install_bundles

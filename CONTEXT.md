@@ -16,6 +16,10 @@ _Avoid_: static files, www
 `user-install.sh`, the script a workspace fetches from nginx and runs as the ubuntu user when its `/nix` volume is fresh.
 _Avoid_: installer, setup script
 
+**Bundle**:
+A named group of Bootstrap-script packages and setup steps toggled off by its `SKIP_USER_INSTALL_<NAME>` variable holding exactly `1`; `linux` is the always-on bundle the others lean on, and a skip variable shapes only the provisioning run — never an already-provisioned volume.
+_Avoid_: feature, profile slice, package group
+
 **User environment file**:
 The single file in the ubuntu home that projects the container environment onto every shell surface; pure exports regenerated at every boot, never hand-edited and never carrying a PATH literal (the Env loader reconstructs PATH).
 _Avoid_: bash env file, env file, profile
@@ -29,11 +33,11 @@ The single static script wired into every shell-activation surface — login she
 _Avoid_: hook, profile script
 
 **Default profile**:
-The Nix profile the Bootstrap script installs in one unattended `nix profile add` of `nixpkgs#` packages (the flake-registry shorthand resolves to nixpkgs-unstable) — every stable toolchain and everyday CLI (GraalVM CE and the JVM build tools, Go, PHP + Composer, the daily CLIs, the everyday utilities); `yq` rides under the nixpkgs attr `yq-go`.
+The Nix profile the Bootstrap script installs in one unattended `nix profile add` of the union of the enabled bundles' `nixpkgs#` packages (the flake-registry shorthand resolves to nixpkgs-unstable); `yq` rides under the nixpkgs attr `yq-go`.
 _Avoid_: tool set, package list
 
 **Carve-outs**:
-The tools deliberately installed outside the read-only Nix store: uv through its official installer, the self-updating agent CLIs (Claude Code, OpenCode) through their vendor scripts, Node through fnm (interactive-only, as nvm was), and Bun and Rust through their vendor installers (bun.sh, rustup — both move faster than a pinned profile and self-update).
+The tools deliberately installed outside the read-only Nix store, each through its bundle's vendor step: uv and the Python it manages (`python`) through uv's official installer, the self-updating agent CLIs (`claude`, `opencode`) through their vendor scripts, Node through fnm — interactive-only, as nvm was (`node`) — and Bun and Rust through their vendor installers (`bun`, `rust` — bun.sh and rustup both move faster than a pinned profile and self-update).
 _Avoid_: exceptions, manual installs
 
 **Image contract**:
