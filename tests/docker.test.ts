@@ -548,6 +548,37 @@ describe('user-install', () => {
     }, 60_000)
   })
 
+  // The signing setup's reachable path under the Tests stack: with no
+  // GH_TOKEN (the dummy env keeps real secrets out), the first boot must
+  // leave git signing entirely unconfigured — no key pair, no
+  // allowed_signers, no signing config — while the pre-token lines
+  // setup_git writes (the credential helper, insteadOf) still land. The
+  // configured path needs a token with write:ssh_signing_key and stays
+  // outside the suite (ADR 0009).
+  describe('git signing', () => {
+    // execBare runs as root, so the gitconfig is read by path, never
+    // through --global/HOME; a missing key exits 1, which `|| true` folds
+    // into the empty string the assertions expect.
+    const gitConfigGet = async (key: string) =>
+      execBare(`git config --file /nix/ubuntu/.gitconfig --get ${key} || true`)
+
+    test('no GH_TOKEN leaves git signing unconfigured', async () => {
+      expect(await execBare('git config --file /nix/ubuntu/.gitconfig --get-regexp "^url\\." || true')).toBe(
+        'url.https://github.com/.insteadof git@github.com:',
+      )
+      expect(await gitConfigGet('user.signingkey')).toBe('')
+      expect(await gitConfigGet('commit.gpgsign')).toBe('')
+      expect(await gitConfigGet('tag.gpgsign')).toBe('')
+      expect(await gitConfigGet('gpg.format')).toBe('')
+      expect(await gitConfigGet('gpg.ssh.allowedSignersFile')).toBe('')
+      expect(
+        await execBare(
+          'test ! -e /nix/ubuntu/.ssh/git_user_signing_key && test ! -e /nix/ubuntu/.ssh/git_user_signing_key.pub && test ! -e /nix/ubuntu/.ssh/allowed_signers && echo absent',
+        ),
+      ).toBe('absent')
+    }, 60_000)
+  })
+
   // The remaining shell surfaces, end to end through the real sshd. sshd
   // builds every session's environment from scratch (UsePAM no: the image ENV
   // never crosses it), so only the shell-init and BASH_ENV wiring below can

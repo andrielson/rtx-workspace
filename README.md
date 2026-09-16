@@ -98,7 +98,19 @@ through `gosu` as `ubuntu`. The bootstrap runs only while the volume is
 fresh (once OpenCode is present, subsequent boots skip straight to sshd),
 and `SKIP_USER_INSTALL=1` skips provisioning on any boot — the escape hatch
 for bringing a container up without waiting on the bootstrap or its nginx
-dependency. It configures git against GitHub through `GH_TOKEN`, and
+dependency. It configures git against GitHub through `GH_TOKEN`, giving
+profiles without a public name or email the login and the ID-based noreply
+address as fallbacks, and issues the git signing key: with the token
+present and `SKIP_GIT_USER_SIGNING_KEY` not `1`, one ed25519 pair per
+volume under `~/.ssh/git_user_signing_key(.pub)` is generated, registered
+with the authenticated account as a GitHub signing key
+(`rtx-workspace: <hostname>`) so pushed commits can show the Verified
+badge, and wired into the local commit/tag signing and verification
+config — a token that cannot manage signing keys answers 403 and the
+setup skips with a log line, and every fresh volume registers one more
+key on the account (GitHub caps none; removing stale ones is manual — the
+reasoning is recorded in
+[ADR 0009](docs/adr/0009-bootstrap-issued-git-signing-keys.md)). It
 installs the public key from `SSH_AUTHORIZED_KEY`. Its install half is one
 unattended `nix profile add` of
 `nixpkgs#` packages (the flake-registry shorthand resolves to
@@ -168,7 +180,11 @@ and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
   default-profile tool, the carve-outs coexist (uv, Claude Code, OpenCode,
   Bun and Rust via their vendor installers; fnm/Node in an interactive
   shell), the retired managers leave no
-  remnants, and a container restart proves the already-bootstrapped
+  remnants, the git-signing setup's token-less path leaves signing
+  unconfigured (the configured path needs a real scoped token writing to a
+  real account and stays a manual check — see
+  [ADR 0009](docs/adr/0009-bootstrap-issued-git-signing-keys.md)), and a
+  container restart proves the already-bootstrapped
   detection skips provisioning on a second boot.
 - `describe("SSH surfaces")` (inside `user-install`) proves the remaining
   shell surfaces on the real sshd: the suite generates a throwaway keypair,
