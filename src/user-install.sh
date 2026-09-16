@@ -33,8 +33,54 @@ _log() {
   echo "[$(date --iso-8601=seconds)] $*"
 }
 
+# The helpers below are pure stdout/exit-status functions, so the unit
+# suite can lift and drive them by name (tests/user-install.test.ts).
+
+# The user.name a profile without a public name gets: its login, which
+# always exists. Empty means absent — gh's `// empty` jq upstream collapses
+# JSON null to no output, never the literal "null" jq would print.
+_identity_name() {
+  if [[ -n ${1:-} ]]; then
+    printf '%s' "${1}"
+  else
+    printf '%s' "${2}"
+  fi
+}
+
+# The user.email a profile without a public email gets: the ID-based
+# noreply address, which GitHub's commit verification can always map back
+# to the account (see ADR 0009).
+_identity_email() {
+  if [[ -n ${1:-} ]]; then
+    printf '%s' "${1}"
+  else
+    printf '%s+%s@users.noreply.github.com' "${2}" "${3}"
+  fi
+}
+
+# The allowed_signers principal: the committer email when one resolved, the
+# * wildcard otherwise — git's ssh verification matches the key first and
+# consults find-principals when the email misses, so the principal only
+# names the entry.
+_allowed_signers_principal() {
+  if [[ -n ${1:-} ]]; then
+    printf '%s' "${1}"
+  else
+    printf '*'
+  fi
+}
+
+# Whether the git signing setup runs: a token must be present and the
+# opt-out unset — exactly '1' disables, mirroring SKIP_USER_INSTALL in the
+# entrypoint; anything else, including '0' or empty, leaves it on.
+_git_signing_enabled() {
+  [[ -n ${1:-} && ${2:-} != '1' ]]
+}
+
 setup_git() {
   local github_name
+  local github_login
+  local github_id
   local github_email
 
   # The helper is intentionally single-quoted: git must expand $GH_TOKEN when
@@ -49,8 +95,20 @@ setup_git() {
   fi
 
   gh auth status
-  github_name="$(gh api user --jq '.name')"
-  github_email="$(gh api user --jq '.email')"
+  # `// empty` collapses a profile's absent name or email to no output;
+  # without it gh prints JSON null as the literal string "null", which
+  # every -z check below would treat as a value.
+  github_name="$(gh api user --jq '.name // empty')"
+  github_login="$(gh api user --jq '.login')"
+  github_id="$(gh api user --jq '.id')"
+  github_email="$(gh api user --jq '.email // empty')"
+
+  # The identity a profile without a public name or email gets: the login
+  # and the ID-based noreply address (see ADR 0009) — both always resolve,
+  # and the email maps back to the account, which GitHub's commit
+  # verification requires of the committer.
+  github_name="$(_identity_name "${github_name}" "${github_login}")"
+  github_email="$(_identity_email "${github_email}" "${github_id}" "${github_login}")"
 
   if [[ -z ${GIT_AUTHOR_NAME:-} ]] || [[ -z ${GIT_COMMITTER_NAME:-} ]]; then
     git config --global user.name "${github_name}"
@@ -59,6 +117,89 @@ setup_git() {
   if [[ -z ${GIT_AUTHOR_EMAIL:-} ]] || [[ -z ${GIT_COMMITTER_EMAIL:-} ]]; then
     git config --global user.email "${github_email}"
   fi
+
+  # The predicate's exit status is the answer by design; nothing inside it
+  # can fail under set -e.
+  # shellcheck disable=SC2310
+  if _git_signing_enabled "${GH_TOKEN}" "${SKIP_GIT_USER_SIGNING_KEY:-}"; then
+    setup_git_signing "${github_email}"
+  fi
+}
+
+# SSH signing for commits and tags (see ADR 0009): one ed25519 key pair per
+# volume under ~/.ssh/git_user_signing_key(.pub), its public half
+# registered with the authenticated account as a GitHub signing key — the
+# Verified badge needs both that registration and a committer email the
+# account maps back to — and the local config plus allowed_signers entry to
+# sign and verify. Reuse over regeneration: a partial first boot that
+# already wrote the pair keeps it, since gh's registration is idempotent by
+# key content and every write below is idempotent by nature.
+setup_git_signing() {
+  local committer_email="${1:-}"
+  local signing_key="${HOME}/.ssh/git_user_signing_key"
+  local allowed_signers="${HOME}/.ssh/allowed_signers"
+  local principal
+  local gh_output
+
+  mkdir --parents "${HOME}/.ssh"
+
+  if [[ ! -e ${signing_key}.pub ]]; then
+    if [[ ! -e ${signing_key} ]]; then
+      _log 'Generating the per-volume git signing key...'
+      # ssh-keygen has no long options; -q quiets the banner, -t names the
+      # type, -N takes the (empty) passphrase, -C the comment, -f the file.
+      ssh-keygen -q -t ed25519 -N '' -C "rtx-workspace ${HOSTNAME}" -f "${signing_key}"
+    else
+      # A partial first boot can leave the private half alone; rebuild the
+      # public half from it. stdin stays /dev/null so a key that asks for a
+      # passphrase fails instead of consuming the script itself on stdin.
+      # ssh-keygen has no long options; -y prints the public half and -f
+      # names the key file.
+      ssh-keygen -y -f "${signing_key}" < /dev/null > "${signing_key}.pub"
+    fi
+  fi
+
+  chmod --verbose 600 "${signing_key}" "${signing_key}.pub"
+
+  # ssh-keygen has no long options; -l lists the fingerprint and -f names
+  # the key file.
+  if ! ssh-keygen -l -f "${signing_key}.pub" > /dev/null; then
+    echo 'The git signing key pair is not a valid SSH public key.' >&2
+    exit 1
+  fi
+
+  _log 'Registering the git signing key with GitHub...'
+  # A 403 means this token cannot manage signing keys — a classic PAT
+  # without write:ssh_signing_key, a fine-grained PAT without the "SSH
+  # signing keys" permission, or an Actions GITHUB_TOKEN — and the whole
+  # setup is skipped rather than failing a legitimate boot; scopes cannot
+  # be pre-checked for fine-grained and App tokens. Every other failure is
+  # as real and fatal as the other gh calls in this script.
+  if ! gh_output="$(gh ssh-key add "${signing_key}.pub" --type signing --title "rtx-workspace: ${HOSTNAME}" 2>&1)"; then
+    if grep --quiet 'HTTP 403' <<< "${gh_output}"; then
+      _log 'The token cannot manage GitHub signing keys. Skipping git signing setup.'
+      printf '%s\n' "${gh_output}" >&2
+      return 0
+    fi
+    printf '%s\n' "${gh_output}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${gh_output}"
+
+  git config --global user.signingkey "${signing_key}.pub"
+  git config --global gpg.format ssh
+  git config --global commit.gpgsign true
+  git config --global tag.gpgsign true
+  git config --global gpg.ssh.allowedSignersFile "${allowed_signers}"
+
+  # The principal is the committer email (or the wildcard when none
+  # resolved); git's verification matches the key first, so the principal
+  # only names the entry.
+  principal="$(_allowed_signers_principal "${committer_email}")"
+  printf '%s %s\n' "${principal}" "$(< "${signing_key}.pub")" > "${allowed_signers}"
+  chmod --verbose 600 "${allowed_signers}"
+
+  _log 'Git signing configured.'
 }
 
 setup_ssh() {

@@ -29,10 +29,14 @@ services:
     # wires it into authorized_keys on first boot. MIRROR_PROBE is the
     # Environment-mirror acceptance probe: the recreate test brings the stack
     # back up with it set, proving a container recreated with a new variable
-    # projects it onto the SSH surfaces.
+    # projects it onto the SSH surfaces. SKIP_GIT_USER_SIGNING_KEY rides the
+    # same interpolation so a local run with a scoped GH_TOKEN can exercise
+    # the signing opt-out; with the stack's token-less env the Bootstrap's
+    # signing setup never runs either way.
     environment:
       SSH_AUTHORIZED_KEY: ${SSH_AUTHORIZED_KEY:-}
       MIRROR_PROBE: ${MIRROR_PROBE:-}
+      SKIP_GIT_USER_SIGNING_KEY: ${SKIP_GIT_USER_SIGNING_KEY:-}
     volumes:
       - type: bind
         source: /var/run/docker.sock

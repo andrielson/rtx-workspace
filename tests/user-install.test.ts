@@ -14,15 +14,23 @@ import { join } from 'node:path'
 describe('user-install', () => {
   const script = readFileSync(join(import.meta.dir, '..', 'src', 'user-install.sh'), 'utf8')
 
-  // Anchored on the definition line and the column-0 closing brace, so
-  // Prettier wrapping the body into multiple lines stays harmless.
-  const wrapperMatch = script.match(/^_curl\(\) \{[\s\S]*?^\}/m)
-  const wrapper = wrapperMatch?.[0] ?? ''
+  // Both lifts anchor on the definition line and the column-0 closing
+  // brace, so Prettier wrapping a body into multiple lines stays harmless.
+  const liftHelper = (name: string) => script.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'm'))?.[0] ?? ''
+  const wrapper = liftHelper('_curl')
+
+  // The pure helpers behind the git-signing setup — the identity
+  // fallbacks, the allowed_signers principal, the enable predicate —
+  // lifted by name the same way, into one file whose trailing "$@" lets
+  // the first argument name the function under test.
+  const helperNames = ['_identity_name', '_identity_email', '_allowed_signers_principal', '_git_signing_enabled']
+  const helpers = helperNames.map(liftHelper).join('\n\n')
 
   let workDir = ''
   let certPath = ''
   let keyPath = ''
   let wrapperPath = ''
+  let helpersPath = ''
 
   beforeAll(async () => {
     expect(wrapper, '_curl wrapper not found in user-install.sh — renamed?').not.toBe('')
@@ -39,6 +47,10 @@ describe('user-install', () => {
 
     wrapperPath = join(workDir, 'wrapper.sh')
     writeFileSync(wrapperPath, `set -euo pipefail\n${wrapper}\n_curl "$@"\n`)
+
+    expect(helperNames.map(liftHelper), 'a lifted helper is missing from user-install.sh — renamed?').not.toContain('')
+    helpersPath = join(workDir, 'helpers.sh')
+    writeFileSync(helpersPath, `set -euo pipefail\n${helpers}\n"$@"\n`)
   }, 30_000)
 
   afterAll(() => {
@@ -71,6 +83,15 @@ describe('user-install', () => {
   const fetchThroughWrapper = async (url: string) => {
     const proc = await $`bash ${wrapperPath} ${url} --cacert ${certPath}`.nothrow().quiet()
     return proc.exitCode
+  }
+
+  // A lifted helper run: the helpers file's trailing "$@" dispatches to the
+  // function named by the first argument with the rest as its arguments.
+  // The printf helpers speak pure stdout (no trailing newline); the
+  // predicate speaks exit status.
+  const runHelper = async (args: string[]) => {
+    const proc = await $`bash ${helpersPath} ${args}`.nothrow().quiet()
+    return { exitCode: proc.exitCode, stdout: proc.stdout.toString() }
   }
 
   describe('curl wrapper', () => {
@@ -122,6 +143,44 @@ describe('user-install', () => {
       } finally {
         endpoint.stop()
       }
+    })
+  })
+
+  // A GitHub profile may expose no public name or email; gh's `// empty`
+  // jq collapses those to no output, and these helpers substitute what
+  // always exists: the login for the name, the ID-based noreply address
+  // for the email — the address commit verification can always map back
+  // to the account (see ADR 0009).
+  describe('identity fallbacks', () => {
+    test('user.name keeps the profile name and falls back to the login', async () => {
+      expect((await runHelper(['_identity_name', 'Jane Doe', 'jane'])).stdout).toBe('Jane Doe')
+      expect((await runHelper(['_identity_name', '', 'jane'])).stdout).toBe('jane')
+    })
+
+    test('user.email keeps the public email and falls back to the noreply address', async () => {
+      expect((await runHelper(['_identity_email', 'jane@example.com', '4242', 'jane'])).stdout).toBe('jane@example.com')
+      expect((await runHelper(['_identity_email', '', '4242', 'jane'])).stdout).toBe(
+        '4242+jane@users.noreply.github.com',
+      )
+    })
+  })
+
+  describe('git signing helpers', () => {
+    test('the allowed_signers principal is the committer email, or the wildcard', async () => {
+      expect((await runHelper(['_allowed_signers_principal', 'jane@example.com'])).stdout).toBe('jane@example.com')
+      expect((await runHelper(['_allowed_signers_principal', ''])).stdout).toBe('*')
+    })
+
+    test('signing is on with a token unless the opt-out is exactly 1', async () => {
+      expect((await runHelper(['_git_signing_enabled', 'gh_token_value', ''])).exitCode).toBe(0)
+      expect((await runHelper(['_git_signing_enabled', 'gh_token_value', '0'])).exitCode).toBe(0)
+      expect((await runHelper(['_git_signing_enabled', 'gh_token_value', 'yes'])).exitCode).toBe(0)
+      expect((await runHelper(['_git_signing_enabled', 'gh_token_value', '1'])).exitCode).toBe(1)
+    })
+
+    test('without a token nothing enables signing', async () => {
+      expect((await runHelper(['_git_signing_enabled', '', ''])).exitCode).toBe(1)
+      expect((await runHelper(['_git_signing_enabled', '', '1'])).exitCode).toBe(1)
     })
   })
 })
