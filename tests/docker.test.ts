@@ -5,13 +5,25 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { resolveComposeProject } from './compose-project'
+
+// The Tests stack's per-worktree identity, resolved from (or generated
+// into) tests/.env — see compose-project.ts for the record's contract and
+// the compose-file header for the full rationale (ADR 0010). The explicit
+// flag below still outranks both that .env and any stray exported
+// COMPOSE_PROJECT_NAME in a shell, so nothing can hijack the suite's
+// identity.
+const project = resolveComposeProject('tests/.env')
+console.log(`Tests stack project: ${project}`)
+
 // Every docker compose invocation in this suite goes through this prefix:
 // the Tests compose file plus the shared project name. Bun Shell expands an
 // interpolated array into separate arguments.
-const compose = ['docker', 'compose', '--file', 'tests/docker-compose.yml', '--project-name', 'rtx-workspace-tests']
+const compose = ['docker', 'compose', '--file', 'tests/docker-compose.yml', '--project-name', project]
 // The Tests compose file lives under tests/, so compose would look for its
-// interpolation .env there — inject the socket's real GID through the
-// process env instead (it wins over any .env file).
+// interpolation .env there (the identity record above) — inject the
+// socket's real GID through the process env instead (it wins over any .env
+// file).
 const env = {
   ...process.env,
   DOCKER_GID: String(statSync('/var/run/docker.sock').gid),
@@ -48,9 +60,14 @@ describe('Dockerfile', () => {
   // compose exec resolves one-off `run` containers too (preferring a regular
   // `up` container when one exists); the only workspace container this
   // project ever runs is the one-off below.
-  const container = 'workspace-test-dockerfile'
-  // The image tag declared by the Tests compose file.
-  const image = 'rtx-workspace:latest'
+  // The one-off's name derives from the project identity: container names
+  // are Docker-global, so a fixed one would collide across worktrees — and
+  // this block's defensive teardown would destroy the other run's container.
+  const container = `${project}-dockerfile`
+  // The built image, resolved by ID from the one-off below: the Tests stack
+  // tags its builds project-scoped (no fixed image: tags anywhere), and an
+  // ID names exactly the image this container runs.
+  let image = ''
 
   // Commands default to the ubuntu user: it is the real consumer of
   // everything under /nix/ubuntu, so a mis-owned file fails here as it
@@ -65,6 +82,8 @@ describe('Dockerfile', () => {
     // Defensive teardown first: the afterAll guarantee does not cover SIGKILL.
     await $`docker rm --force --volumes ${container}`.nothrow().quiet()
     await $`${compose} run --detach --name ${container} --no-deps --entrypoint sleep workspace infinity`.env(env)
+    // inspect has no long-form template syntax; {{.Image}} yields the ID.
+    image = (await $`docker inspect --format {{.Image}} ${container}`.text()).trim()
   }, 300_000)
 
   afterAll(async () => {
@@ -272,7 +291,7 @@ describe('Dockerfile', () => {
     }, 30_000)
 
     test('SKIP_USER_INSTALL=1 boots straight to sshd without provisioning', async () => {
-      const skipContainer = 'workspace-test-skip-install'
+      const skipContainer = `${project}-skip-install`
       // Defensive teardown first: a failed prior run may have left it behind.
       await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
 
@@ -336,8 +355,12 @@ describe('Dockerfile', () => {
 // since sshd is the entrypoint's exec'd command — so the stack reaching a
 // healthy state is itself the no-manual-steps acceptance check.
 describe('user-install', () => {
-  // The Tests stack's container_name for the workspace service.
-  const container = 'workspace-test'
+  // The running workspace container's name, resolved once the stack is up:
+  // compose derives it from the project identity (the fixed container_name
+  // is gone), and one replica keeps the same derived name across the
+  // restart and recreate cycles below. Resolving instead of deriving keeps
+  // the suite independent of compose's naming scheme.
+  let container = ''
 
   // The plainest surface: docker exec with no --user, resolved purely by the
   // image ENV (PATH hook #1 of 3). The bash -c wrapper only merges stderr
@@ -443,6 +466,12 @@ describe('user-install', () => {
     // boot surfaces as compose's own "unhealthy" failure, and
     // --wait-timeout is only a backstop beyond it.
     await $`${compose} up --detach --wait --wait-timeout 1500`.env(stackEnv)
+
+    // The stack's container, by way of its ID: `compose ps --quiet` names
+    // the running service's container, and inspect's {{.Name}} prints its
+    // name with a leading slash that nothing strips.
+    const containerId = (await $`${compose} ps --quiet workspace`.env(stackEnv).text()).trim()
+    container = (await $`docker inspect --format {{.Name}} ${containerId}`.text()).trim().replace(/^\//, '')
 
     // The Tests stack publishes sshd on a random port on every interface (a
     // loopback-bound port would be unreachable from a workspace — ADR 0005);
@@ -704,10 +733,10 @@ describe('user-install', () => {
   // bundle (the union installed the enabled packages anyway) and the last
   // vendor bundle (the tail completed, sentinel included).
   describe('bundle skips', () => {
-    const skipContainer = 'workspace-test-skip-bundle'
+    const skipContainer = `${project}-skip-bundle`
 
     // The bare surface bound to the one-off container below, in the shape
-    // of execBare (which is bound to the stack's own container_name).
+    // of execBare (which is bound to the stack's own running container).
     const execSkip = async (script: string) =>
       $`docker exec ${skipContainer} bash -c ${script}`.text().then((stdout) => stdout.trim())
 

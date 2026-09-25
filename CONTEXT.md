@@ -5,7 +5,7 @@ A container-based remote development workspace: one GPU-enabled Linux container 
 ## Language
 
 **Tests stack**:
-The compose file under `tests/`; declared in full (no extends) with a throwaway identity — its own project name, container name, project-scoped volume, dummy environment, throwaway published SSH port — so it can run beside any live deployment, and both of its builds use the `src/` context through the tracked `tests/src` symlink.
+The compose file under `tests/`; declared in full (no extends) with a throwaway per-worktree identity — a randomly suffixed project name scoping everything Docker-global it touches (containers, volume, image tags), plus dummy environment and a throwaway published SSH port — so its runs go beside any live deployment and beside each other (one run per worktree), and both of its builds use the `src/` context through the tracked `tests/src` symlink.
 _Avoid_: test compose, CI stack
 
 **Web root**:
