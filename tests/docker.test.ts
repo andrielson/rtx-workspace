@@ -522,6 +522,8 @@ describe('user-install', () => {
       ['rsync --version', /^rsync\s+version \d+/],
       ['tmux -V', /^tmux \d+/],
       ['jq --version', /^jq-\d+\.\d+/],
+      ['less --version', /^less \d+/],
+      ['man --version', /^man \d+\.\d+/],
     ])(
       '%s runs',
       async (command, expected) => {
@@ -644,6 +646,90 @@ describe('user-install', () => {
     // call from an SSH shell dies on EACCES at the socket.
     test('a login shell carries the docker socket group', async () => {
       expect((await sshLogin('id --groups')).split(/\s+/)).toContain(env.DOCKER_GID)
+    }, 60_000)
+  })
+
+  // Git's external runtime dependencies: git shells out for its pager
+  // (less by default), its editor (resolved through the EDITOR chain) and
+  // its man reader (the man program), so the profile carries less and
+  // man-db and the Env loader exports MANPATH and EDITOR=nano. The SSH
+  // surfaces are where it pays off — sshd builds every session's
+  // environment from scratch, so a resolved editor or manpath there can
+  // only come from the loader.
+  describe('git runtime dependencies', () => {
+    test('git branch pages through less on a TTY surface', async () => {
+      // script re-attaches the command to a fresh pty — the only way a
+      // docker-exec surface becomes a TTY, which is the condition git
+      // pages under. util-linux script has no long form for the typescript
+      // file argument, and TERM is set explicitly because docker exec
+      // carries none and less needs terminfo. git exports LESS=FRX into
+      // the pager, so less quits by itself once the output fits one
+      // screen and the pty never waits on input.
+      const output = await execBare(`set -e
+        work="$(mktemp --directory)"
+        cd "$work"
+        git init --quiet
+        git config user.name 'Test User'
+        git config user.email 'test@example.com'
+        git commit --allow-empty --quiet --message init
+        git branch side-branch
+        env TERM=xterm script --quiet --command 'git branch' /dev/null
+      `)
+      expect(output).toContain('side-branch')
+      expect(output).not.toContain('cannot run')
+    }, 60_000)
+
+    test('git help git renders a man page', async () => {
+      // git execs man with its own man directory prepended to MANPATH, so
+      // the rendered GIT(1) title is the man reader working end to end;
+      // bare man output is plain text on a non-TTY stdout.
+      expect(await execBare('git help git | head --lines=1')).toMatch(/^GIT\(1\)/)
+    }, 60_000)
+
+    test('the Env loader exports MANPATH on every shell surface', async () => {
+      // Every component of MANPATH is the profile's man directory. Login
+      // shells see it twice: ~/.profile sources the Nix profile's own
+      // nix.sh hook, which prepends the same directory without a duplicate
+      // check — a wart of the installer's script — and man searches each
+      // entry in turn, so the duplicate never changes what it finds.
+      const assertProfileManpath = (value: string) =>
+        expect(new Set(value.split(':').filter((entry) => entry !== ''))).toEqual(
+          new Set(['/nix/ubuntu/.nix-profile/share/man']),
+        )
+      assertProfileManpath(await sshLogin('printenv MANPATH'))
+      assertProfileManpath(await sshCommand('printenv MANPATH'))
+      assertProfileManpath(await execInteractive('printenv MANPATH'))
+    }, 60_000)
+
+    test('a bare man finds the profile man pages', async () => {
+      // --where resolves the page's location without formatting it: the
+      // profile's man hierarchy is where the default profile's pages land.
+      expect(await sshCommand('man --where git-config')).toMatch(/\/share\/man\/man1\/git-config\.1/)
+    }, 60_000)
+
+    test('git resolves nano as its editor', async () => {
+      // git var GIT_EDITOR prints the exact editor the GIT_EDITOR →
+      // core.editor → VISUAL → EDITOR → vi chain lands on.
+      expect(await sshLogin('git var GIT_EDITOR')).toBe('nano')
+      expect(await sshCommand('git var GIT_EDITOR')).toBe('nano')
+    }, 60_000)
+
+    test('a commit message with nothing set reaches nano and comes back', async () => {
+      // The end-to-end path: an SSH session (environment built by sshd from
+      // scratch, so EDITOR can only be the loader's) runs git commit under
+      // a pty, nano really opens COMMIT_EDITMSG, and Ctrl+X (printf's \x18
+      // — printf has no long form for format escapes; the byte exits an
+      // unmodified buffer without saving) brings it back so git aborts on
+      // the empty message. A missing or unwired editor would instead die
+      // with "unable to start editor" and never print the abort line.
+      const output = await sshCommand(`cd "$(mktemp --directory)"
+        git init --quiet
+        git config user.name 'Test User'
+        git config user.email 'test@example.com'
+        printf '\\x18' | env TERM=xterm script --quiet --command 'git commit --allow-empty' /dev/null || true
+      `)
+      expect(output).toContain('Aborting commit due to empty commit message')
+      expect(output).not.toContain('unable to start editor')
     }, 60_000)
   })
 

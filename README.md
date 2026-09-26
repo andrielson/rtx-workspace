@@ -71,7 +71,13 @@ Nix itself as the only tool-side content (the reasoning is recorded in
   non-interactive bash a session's servers spawn locally — the coding
   agents' Bash tools — via the `BASH_ENV` that sshd's `SetEnv` injects;
   `~/.bashrc` stays stock, and a bare `docker exec` needs no wiring (it
-  carries the container environment natively);
+  carries the container environment natively). The loader also exports two
+  defaults of its own, git's external runtime environment: `MANPATH`, the
+  profile's man directory with a trailing colon keeping the system search
+  path behind it, so bare `man`/`apropos` find the pages the Default
+  profile already ships, and `EDITOR=nano`, what git's editor chain falls
+  back to — a value the User environment file projects from the container
+  environment overrides either one;
 - copies `gosu` (from `tianon/gosu`) into `/usr/local/bin` and drops
   configuration into place: `docker-entrypoint`, `home-env-mirror` (the
   Environment mirror), the `01-home-bash-env.sh` Env loader and
@@ -133,19 +139,19 @@ and moves on. The bundles (the Nix-carrying rows join that one profile
 union; each bundle's own steps run in the order listed, ending with bun —
 the default sentinel's own bundle):
 
-| Bundle     | Skip variable                  | Delivers                                                                                                                                                                                                |
-| ---------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `linux`    | — (always on)                  | the everyday utilities (ripgrep, jq, yq under the attr `yq-go`, shellcheck, shfmt, tmux, ffmpeg, …) plus the git/gh configuration, SSH-key setup and bash-completion wiring every other bundle leans on |
-| `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                |
-| `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                      |
-| `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle, Kotlin, Maven, Quarkus, Scala                                                                                                                                                       |
-| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                      |
-| `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                          |
-| `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                     |
-| `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                               |
-| `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                             |
-| `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                |
-| `bun`      | `SKIP_USER_INSTALL_BUN=1`      | Bun                                                                                                                                                                                                     |
+| Bundle     | Skip variable                  | Delivers                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `linux`    | — (always on)                  | the everyday utilities (ripgrep, jq, yq under the attr `yq-go`, shellcheck, shfmt, tmux, ffmpeg, …) plus git's external runtime dependencies — `less` as the default pager and `man-db` as the man reader, with the already-listed nano wired as git's editor through the Env loader's `EDITOR` export — and the git/gh configuration, SSH-key setup and bash-completion wiring every other bundle leans on |
+| `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                                                                                                                                                                                                                    |
+| `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle, Kotlin, Maven, Quarkus, Scala                                                                                                                                                                                                                                                                                                                                                           |
+| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                                                                                                                                                                                                                          |
+| `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                                                                                                                                                                                                                              |
+| `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                                                                                                                                                                                                                         |
+| `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                                                                                                                                                                                                                                   |
+| `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `bun`      | `SKIP_USER_INSTALL_BUN=1`      | Bun                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Bundle variables shape only the provisioning run: on an
 already-bootstrapped volume they neither install what an earlier
@@ -179,7 +185,7 @@ nginx sibling serving the Bootstrap script before provisioning starts
 
 ## Testing
 
-The suite is two Bun test files driven through Bun Shell:
+The suite is four Bun test files driven through Bun Shell:
 
 ```bash
 bun test
@@ -265,6 +271,14 @@ multiply disk, network and CPU cost — budget accordingly.
   Bootstrap script never re-runs — the stack also comes back with a new
   `MIRROR_PROBE` variable, proving the Environment mirror projects
   container-environment changes onto the SSH surfaces.
+- `describe("git runtime dependencies")` (inside `user-install`) proves
+  git's external runtime dependencies on a provisioned volume: `git
+branch` paging through less under a real pty (`script`), `git help git`
+  rendering a man page, a bare `man` resolving a profile page through the
+  Env loader's `MANPATH` export, and — since sshd builds every session's
+  environment from scratch — git landing on nano through the `EDITOR`
+  chain, down to a commit message opened in nano and coming back under a
+  pty.
 - `tests/user-install.test.ts` unit-tests the Bootstrap script itself,
   Docker-free: the shared curl wrapper every vendor-installer fetch goes
   through is lifted out of the script by name and run against a loopback
@@ -276,7 +290,17 @@ multiply disk, network and CPU cost — budget accordingly.
   flakiness instead of dying to it. The bundle gate (`bundle_enabled`) is
   lifted the same way and pinned to its exactly-`1` skip contract: unset,
   `0`, empty and any other value run the bundle, only `1` skips it, and
-  another bundle's skip variable never leaks in.
+  another bundle's skip variable never leaks in. The same file pins the
+  always-on `linux` union to the git runtime dependencies themselves —
+  `nixpkgs#less` and `nixpkgs#man-db` — so neither can silently slip behind
+  a skip variable.
+- `tests/env-loader.test.ts` sources the Env loader in a sandbox home,
+  Docker-free, and pins what it exports onto every shell surface:
+  `MANPATH` (the profile's man directory) and `EDITOR=nano` — git's man
+  reader and editor — with a value the User environment file carries
+  overriding both.
+- `tests/compose-project.test.ts` unit-tests the per-worktree identity
+  resolution itself, Docker-free.
 
 ## Continuous integration and releases
 

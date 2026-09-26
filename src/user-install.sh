@@ -300,7 +300,9 @@ install_nix_profile() {
   # linux — the always-on bundle, with no skip variable: every other bundle
   # leans on it (curl for the vendor installers, git and gh for setup_git,
   # unzip for bun's archive), and its steps wire the interactive shell and
-  # the SSH surface below.
+  # the SSH surface below. less and man-db ride along as git's external
+  # runtime dependencies: the default pager and the man reader git execs,
+  # both resolved from PATH.
   packages+=(
     nixpkgs#bash-completion
     nixpkgs#brotli
@@ -311,7 +313,9 @@ install_nix_profile() {
     nixpkgs#git
     nixpkgs#htop
     nixpkgs#jq
+    nixpkgs#less
     nixpkgs#lz4
+    nixpkgs#man-db
     nixpkgs#nano
     nixpkgs#ripgrep
     nixpkgs#rsync

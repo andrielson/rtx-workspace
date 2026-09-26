@@ -40,6 +40,21 @@ unset profile_bin
 
 export PATH
 
+# Git's runtime environment on every shell surface. MANPATH carries the
+# profile's man directory — where the default profile's pages land — with
+# manpath(5)'s trailing empty component splicing the default search path in
+# behind it, so bare man/apropos find the profile's pages and the system
+# Nix profile's own ones after them. On login shells the profile's own
+# nix.sh hook (sourced from ~/.profile) prepends the same directory once
+# more without a duplicate check, so the value can carry it twice; man
+# searches each entry in turn, which makes the duplicate harmless. EDITOR
+# is what git's editor chain falls back to; nano is already in the Default
+# profile. Both are defaults, not mandates: the User environment file
+# sourced below — the projection of the container environment — overrides
+# either whenever it carries a value.
+export MANPATH="${HOME}/.nix-profile/share/man:"
+export EDITOR='nano'
+
 # The User environment file: a projection of the container environment,
 # regenerated at every boot by the Environment mirror (see ADR 0006).
 if [[ -s "${HOME}/.bash_env" ]]; then

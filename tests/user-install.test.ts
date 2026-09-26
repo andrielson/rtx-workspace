@@ -130,6 +130,27 @@ describe('user-install', () => {
     })
   })
 
+  // Git resolves its pager and its man reader from PATH — no config can
+  // substitute for the binaries — so both must ride the always-on union.
+  // The block is lifted as the bare packages+=(...) array, never a
+  // bundle_packages() call: a dependency landing behind a skip variable
+  // would vanish from volumes provisioned with that bundle skipped.
+  describe('linux bundle', () => {
+    // Anchored on nixpkgs#-only entry lines, so the bundle_packages
+    // helper's packages+=("${@}") never matches.
+    const alwaysOnPackages = script.match(/packages\+=\(\n((?:\s+nixpkgs#[^\n]+)+)\n\s*\)/)?.[1] ?? ''
+
+    test('package union is found in the Bootstrap script', () => {
+      expect(alwaysOnPackages, 'the linux bundle packages block not found in user-install.sh — restructured?').not.toBe(
+        '',
+      )
+    })
+
+    test.each(['nixpkgs#less', 'nixpkgs#man-db'])('%s is in the always-on union', (pkg) => {
+      expect(alwaysOnPackages).toContain(pkg)
+    })
+  })
+
   // The gate decides every bundle's participation; its contract mirrors the
   // entrypoint's global SKIP_USER_INSTALL kill-switch (exactly '1' skips,
   // anything else — '0', empty, unset — runs). DEMO is a throwaway bundle
