@@ -69,3 +69,8 @@ script, Web root — change in that effort, not before.
   non-interactive surface. The hook set gained `~/.cargo/bin`, matching the
   image ENV PATH the frozen `~/.bash_env` literal used to smuggle onto SSH
   shells.
+- 2026-09-26, during the default profile refresh (#31): shfmt left the
+  profile (its old existence tests were deleted; no absence test written),
+  the JAVA bundle's Gradle line switched from the default (8.x) attribute to
+  `gradle_9` — the pinned registry carries both majors side by side — and
+  glab (the GitLab CLI) and grpcurl joined the linux bundle.

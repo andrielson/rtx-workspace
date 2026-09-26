@@ -364,9 +364,9 @@ describe('user-install', () => {
 
   // The plainest surface: docker exec with no --user, resolved purely by the
   // image ENV (PATH hook #1 of 3). The bash -c wrapper only merges stderr
-  // for tools that print their version there (kotlin, scala); bash has no
-  // long-form options for -c, and the wrapper sources no init files, so
-  // PATH resolution is identical to a bare exec.
+  // for tools that print their version there (grpcurl, kotlin, scala); bash
+  // has no long-form options for -c, and the wrapper sources no init files,
+  // so PATH resolution is identical to a bare exec.
   const execBare = async (script: string) =>
     $`docker exec ${container} bash -c ${script}`.text().then((stdout) => stdout.trim())
 
@@ -491,14 +491,16 @@ describe('user-install', () => {
   describe('default profile', () => {
     // One row per default-profile tool, run on the bare-exec surface. The
     // expected shapes stay loose: versions float with nixpkgs-unstable by
-    // design (ADR 0003). quarkus and shfmt print a bare semver; the yq row
-    // asserts the Go implementation (the nixpkgs yq-go rename gotcha); the
-    // compose row pins the CLI plugin nixpkgs' docker-client bundles
-    // (composeSupport) — the workspace speaks `docker compose` out of the
-    // box, not just the bare CLI.
+    // design (ADR 0003). quarkus prints a bare semver; the gradle row pins
+    // the 9 line (the bundle names gradle_9 explicitly, since the pinned
+    // registry carries both majors side by side); the yq row asserts the Go
+    // implementation (the nixpkgs yq-go rename gotcha); the compose row pins
+    // the CLI plugin nixpkgs' docker-client bundles (composeSupport) — the
+    // workspace speaks `docker compose` out of the box, not just the bare
+    // CLI.
     test.each([
       ['java --version', /GraalVM CE/],
-      ['gradle --version', /Gradle \d+\.\d+/],
+      ['gradle --version', /Gradle 9\.\d+/],
       ['kotlin -version 2>&1', /Kotlin version \d+\.\d+/],
       ['mvn --version', /Apache Maven \d+\.\d+/],
       ['quarkus --version', /^\d+\.\d+\.\d+$/],
@@ -511,9 +513,10 @@ describe('user-install', () => {
       ['bun --version', /^\d+\.\d+/],
       ['gh --version', /^gh version \d+/],
       ['git --version', /^git version \d+\.\d+/],
+      ['glab --version', /^glab \d+\.\d+/],
+      ['grpcurl --version 2>&1', /^grpcurl \d+\.\d+/],
       ['yq --version', /mikefarah/],
       ['shellcheck --version', /version: \d+\.\d+/],
-      ['shfmt --version', /^\d+\.\d+\.\d+$/],
       ['docker --version', /^Docker version \d+/],
       ['docker compose version', /Docker Compose version v?\d+\.\d+/],
       ['fnm --version', /^fnm \d+/],
@@ -637,6 +640,20 @@ describe('user-install', () => {
       expect(await sshCommand('bash -c "printenv UV_PYTHON"')).toBe('3.14')
     }, 60_000)
 
+    // The tools this refresh added to the linux bundle, on both real SSH
+    // surfaces: the login shell (the Env loader through /etc/profile.d)
+    // resolves them, and the bare ssh command (the loader at the top of
+    // /etc/bash.bashrc) runs them. grpcurl prints its version on stderr, so
+    // the remote script merges the streams before matching.
+    test.each(['glab', 'grpcurl'])(
+      '%s resolves and runs on the SSH surfaces',
+      async (command) => {
+        expect(await sshLogin(`command -v ${command}`)).toBe(`/nix/ubuntu/.nix-profile/bin/${command}`)
+        expect(await sshCommand(`${command} --version 2>&1`)).toMatch(new RegExp(`^${command} \\d+\\.\\d+`))
+      },
+      60_000,
+    )
+
     // The socket-group regression: compose's group_add grants the docker
     // socket's GID only to the container's process tree, but sshd rebuilds
     // each session's groups from /etc/group — the entrypoint must
@@ -707,7 +724,7 @@ describe('user-install', () => {
       // …every default-profile tool and carve-out still resolves, one
       // command per name (node stays interactive-only, as ever)…
       const tools =
-        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
+        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git glab grpcurl yq shellcheck docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
           ' ',
         )
       const paths = (await execBare(`command -v ${tools.join(' ')}`)).split('\n')
