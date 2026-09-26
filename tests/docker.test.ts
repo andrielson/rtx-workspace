@@ -534,11 +534,14 @@ describe('user-install', () => {
   describe('carve-outs', () => {
     // Outside the read-only store, on ~/.local/bin (PATH hook #1 covers
     // it): uv by its official installer, the agent CLIs by their vendor
-    // scripts (they rewrite their own binary).
+    // scripts (they rewrite their own binary), the TWG CLI by Atlassian's
+    // installer (its built-in upgrader rewrites the binary, which a store
+    // path forbids).
     test.each([
       ['uv --version', /^uv \d+/],
       ['claude --version', /Claude Code/],
       ['opencode --version', /^\d+\.\d+\.\d+$/],
+      ['twg --version', /^\d+\.\d+\.\d+$/],
     ])(
       '%s runs outside the store',
       async (command, expected) => {
@@ -547,15 +550,19 @@ describe('user-install', () => {
       120_000,
     )
 
+    test('twg resolves in ~/.local/bin on a fresh boot', async () => {
+      expect(await execBare('command -v twg')).toBe('/nix/ubuntu/.local/bin/twg')
+    }, 60_000)
+
     test("node resolves in an interactive shell with fnm's LTS default", async () => {
       expect(await execInteractive('node --version')).toMatch(/^v\d+\.\d+\.\d+/)
     }, 120_000)
 
     test('fnm, node, profile tools and the carve-outs coexist in one shell', async () => {
       // command -v exits non-zero when any named command is missing, so
-      // resolving all six at once is the check — one shell carrying the
+      // resolving all seven at once is the check — one shell carrying the
       // Nix profile, fnm's Node, and the store-outside carve-outs.
-      expect((await execInteractive('command -v node java fnm uv claude opencode')).split('\n')).toHaveLength(6)
+      expect((await execInteractive('command -v node java fnm uv claude opencode twg')).split('\n')).toHaveLength(7)
     }, 120_000)
 
     test('node stays interactive-only, as nvm was', async () => {
@@ -637,6 +644,14 @@ describe('user-install', () => {
       expect(await sshCommand('bash -c "printenv UV_PYTHON"')).toBe('3.14')
     }, 60_000)
 
+    // The linux bundle's vendor carve-out rides every PATH hook too: the
+    // login shell reaches it through /etc/profile.d, the bare ssh command
+    // through the loader at the top of /etc/bash.bashrc.
+    test('the linux bundle carve-out resolves on the SSH surfaces', async () => {
+      expect(await sshLogin('command -v twg')).toBe('/nix/ubuntu/.local/bin/twg')
+      expect(await sshCommand('twg --version')).toMatch(/^\d+\.\d+\.\d+$/)
+    }, 60_000)
+
     // The socket-group regression: compose's group_add grants the docker
     // socket's GID only to the container's process tree, but sshd rebuilds
     // each session's groups from /etc/group — the entrypoint must
@@ -707,7 +722,7 @@ describe('user-install', () => {
       // …every default-profile tool and carve-out still resolves, one
       // command per name (node stays interactive-only, as ever)…
       const tools =
-        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
+        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode twg'.split(
           ' ',
         )
       const paths = (await execBare(`command -v ${tools.join(' ')}`)).split('\n')
