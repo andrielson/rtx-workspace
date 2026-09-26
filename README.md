@@ -32,10 +32,12 @@ the image.
 
 The repository's product is the workspace image; nothing is layered through
 `extends:` anymore. `tests/docker-compose.yml` — the **Tests stack** —
-declares every service in full with a throwaway identity (own project name,
-container name, project-scoped volume, dummy environment, throwaway SSH
-port) so tests run beside any live deployment without touching it. Both of
-its builds use the `src/` context through the tracked `tests/src` symlink;
+declares every service in full with a throwaway per-worktree identity (a
+randomly suffixed project name scoping its containers, volume and image
+tags, plus dummy environment and a throwaway SSH port) so tests run beside
+any live deployment — and suite runs from separate worktrees beside each
+other on the same daemon — without interference. Both of its builds use the
+`src/` context through the tracked `tests/src` symlink;
 the nginx Dockerfile stays in `tests/`, outside its context (the reasoning
 is recorded in
 [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
@@ -198,6 +200,24 @@ host, where the paths inside a workspace's `/nix` volume do not exist — so
 the suite also runs from inside a workspace (see
 [ADR 0004](docs/adr/0004-baked-nginx-bootstrap-script-for-tests-stack.md)
 and [ADR 0007](docs/adr/0007-standalone-tests-compose-symlink-context.md)).
+
+The Tests stack's identity is per worktree: the suite resolves (or, on
+first run, generates and records) a project name
+`rtx-workspace-tests-<8 hex>` in `tests/.env` as `COMPOSE_PROJECT_NAME` —
+git-ignored, and loaded by compose itself from the compose file's
+directory — and every Docker-global name a run touches derives from it:
+the project, the built image tags (project-scoped, so a hand-built local
+`rtx-workspace:latest` is never overwritten), and the suite's one-off
+containers (the reasoning is recorded in
+[ADR 0010](docs/adr/0010-per-worktree-tests-stack-identity.md)). That is
+what lets `bun test` run in several worktrees against
+one Docker daemon in parallel; two runs in the _same_ worktree still
+collide — the record is an identity, not a lock. It is never deleted by
+the suite, so the next run's defensive teardown cleans up a crashed one;
+delete the file to force a fresh identity. Manual commands need no flags
+to aim at the live stack (`docker compose --file tests/docker-compose.yml
+logs workspace`) because compose loads the same `.env`. Parallel runs
+multiply disk, network and CPU cost — budget accordingly.
 
 - `describe("Dockerfile")` verifies the **Image contract**: what the image
   alone delivers before the Bootstrap script ever runs. A one-off workspace
