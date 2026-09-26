@@ -522,6 +522,10 @@ describe('user-install', () => {
       ['rsync --version', /^rsync\s+version \d+/],
       ['tmux -V', /^tmux \d+/],
       ['jq --version', /^jq-\d+\.\d+/],
+      // The unfree add's binary (its own impure invocation, never the
+      // union): newer releases also print an update notice below the
+      // version line, so the match stays unanchored.
+      ['acli --version', /acli version \d+\.\d+\.\d+/],
     ])(
       '%s runs',
       async (command, expected) => {
@@ -628,6 +632,16 @@ describe('user-install', () => {
       expect(await sshCommand('jq --version')).toMatch(/^jq-\d+/)
     }, 60_000)
 
+    // acli, the unfree add's binary, rides the same profile PATH as every
+    // other default-profile tool: it must resolve and report a version on
+    // both surfaces (the bare docker exec half lives in the default-profile
+    // rows above). Newer releases print an update notice below the version
+    // line, so the match stays unanchored.
+    test('acli resolves and reports a version on the SSH surfaces', async () => {
+      expect(await sshLogin('command -v acli')).toBe('/nix/ubuntu/.nix-profile/bin/acli')
+      expect(await sshCommand('acli --version')).toMatch(/acli version \d+\.\d+\.\d+/)
+    }, 60_000)
+
     // The coding-agent surface: a non-interactive bash spawned locally under
     // an SSH-descended server (ZCode's Bash tool pattern) inherits BASH_ENV
     // and nothing else — exactly what a nested `bash -c` sees, and the
@@ -707,7 +721,7 @@ describe('user-install', () => {
       // …every default-profile tool and carve-out still resolves, one
       // command per name (node stays interactive-only, as ever)…
       const tools =
-        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
+        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git acli yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
           ' ',
         )
       const paths = (await execBare(`command -v ${tools.join(' ')}`)).split('\n')

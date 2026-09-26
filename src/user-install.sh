@@ -288,13 +288,14 @@ install_nix_profile() {
   # every enabled bundle's packages: one evaluation, one atomic profile
   # generation, and a partial-failure re-run that finds a package already
   # installed just warns and moves on (the add is idempotent). All
-  # free-licensed, so the evaluation stays pure. yq rides under yq-go:
-  # nixpkgs' top-level yq is the Python one. curl and wget land for newer
-  # versions than apt carries, the profile bin shadowing apt's copies once
-  # installed (apt's curl stays regardless: the entrypoint fetches this
-  # script before any profile exists). unzip serves the vendor installers
-  # (bun's unpacks its archive). The profile bin is on PATH from the image
-  # ENV hook, so every command resolves the moment this lands.
+  # free-licensed, so the evaluation stays pure — the one unfree package
+  # (acli) gets its own invocation below. yq rides under yq-go: nixpkgs'
+  # top-level yq is the Python one. curl and wget land for newer versions
+  # than apt carries, the profile bin shadowing apt's copies once installed
+  # (apt's curl stays regardless: the entrypoint fetches this script before
+  # any profile exists). unzip serves the vendor installers (bun's unpacks
+  # its archive). The profile bin is on PATH from the image ENV hook, so
+  # every command resolves the moment this lands.
   local packages=()
 
   # linux — the always-on bundle, with no skip variable: every other bundle
@@ -338,6 +339,19 @@ install_nix_profile() {
   bundle_packages PHP nixpkgs#php nixpkgs#phpPackages.composer
 
   nix profile add "${packages[@]}"
+
+  # acli cannot join the union above: nixpkgs marks the Atlassian CLI
+  # unfree, and an unfree add needs NIXPKGS_ALLOW_UNFREE=1 plus --impure —
+  # flags that would taint the whole union command. Its own invocation
+  # keeps every other package pure (the unfree escape hatch ADR 0003
+  # records for ad-hoc needs, structural for this one package). It adds
+  # the .unwrapped derivation: the default attr wraps the vendor binary in
+  # a bubblewrap FHS env, and bubblewrap needs unprivileged user namespaces
+  # that a default Docker container's seccomp profile denies — the vendor
+  # binary itself is static and runs bare. The add is idempotent like the
+  # union's: a partial-failure re-run that finds it installed just warns
+  # and moves on.
+  NIXPKGS_ALLOW_UNFREE=1 nix profile add --impure nixpkgs#acli.unwrapped
 }
 
 setup_completions() {

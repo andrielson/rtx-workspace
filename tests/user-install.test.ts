@@ -163,6 +163,50 @@ describe('user-install', () => {
     })
   })
 
+  // The profile step's purity contract: the enabled bundles' packages ride
+  // one pure `nix profile add` union, and exactly one package — acli, unfree
+  // in nixpkgs — lands through its own dedicated invocation carrying the
+  // ADR 0003 escape hatch (NIXPKGS_ALLOW_UNFREE=1 plus --impure), because
+  // those flags would taint the whole union. Textual like the curl-wrapper
+  // checks: the script cannot be sourced without a home to provision.
+  describe('unfree profile add', () => {
+    const profileAdds = script
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .filter((line) => line.includes('nix profile add'))
+
+    test('the profile step makes exactly two adds — the pure union and the dedicated acli one', () => {
+      expect(profileAdds).toHaveLength(2)
+    })
+
+    test('the union add stays pure — no unfree escape hatch on it', () => {
+      const unionAdd = profileAdds.find((line) => line.includes('packages[@]'))
+      expect(unionAdd).toBeDefined()
+      expect(unionAdd).not.toContain('--impure')
+      expect(unionAdd).not.toContain('NIXPKGS_ALLOW_UNFREE')
+    })
+
+    test('acli rides the only impure add, and that add names nothing but acli', () => {
+      const impureAdds = profileAdds.filter((line) => line.includes('--impure'))
+      expect(impureAdds).toHaveLength(1)
+      expect(impureAdds[0]).toContain('NIXPKGS_ALLOW_UNFREE=1')
+      expect(impureAdds[0]).toContain('nixpkgs#acli')
+      expect(impureAdds[0]).not.toContain('packages[@]')
+    })
+
+    test('acli never joins the union packages array', () => {
+      // The array spans from its declaration to the pure add that installs
+      // it — everything between is the union, so acli's absence there is
+      // what keeps every union evaluation pure. The search for the add
+      // starts at the declaration: earlier comments may name the command.
+      const arrayStart = script.indexOf('local packages=()')
+      const arrayEnd = script.indexOf('nix profile add', arrayStart)
+      expect(arrayStart).toBeGreaterThanOrEqual(0)
+      expect(arrayEnd).toBeGreaterThan(arrayStart)
+      expect(script.slice(arrayStart, arrayEnd)).not.toContain('acli')
+    })
+  })
+
   describe('transient vendor errors', () => {
     test('a 503 is retried and the fetch still succeeds', async () => {
       const endpoint = vendorEndpoint(1, 503)

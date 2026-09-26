@@ -69,3 +69,16 @@ script, Web root — change in that effort, not before.
   non-interactive surface. The hook set gained `~/.cargo/bin`, matching the
   image ENV PATH the frozen `~/.bash_env` literal used to smuggle onto SSH
   shells.
+- 2026-09-26, with #33: the unfree escape hatch goes structural. The
+  Atlassian CLI (`acli`) — nixpkgs' only unfree package in the default
+  profile — cannot ride the pure union: `NIXPKGS_ALLOW_UNFREE=1` plus
+  `--impure` are whole-command flags, so sharing the union invocation
+  would have made every first-boot install impure to admit one package.
+  It lands through its own dedicated
+  `NIXPKGS_ALLOW_UNFREE=1 nix profile add --impure nixpkgs#acli.unwrapped`
+  right after the union, and every other package stays pure. The add
+  takes the `.unwrapped` derivation because the default attr wraps the
+  vendor binary in a bubblewrap FHS env, and bubblewrap needs
+  unprivileged user namespaces that a default Docker container's seccomp
+  profile denies — the vendor binary itself is static and runs bare (only
+  the beta `acli rovodev` component loses its bundled FHS libraries).
