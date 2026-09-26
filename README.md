@@ -133,19 +133,19 @@ and moves on. The bundles (the Nix-carrying rows join that one profile
 union; each bundle's own steps run in the order listed, ending with bun —
 the default sentinel's own bundle):
 
-| Bundle     | Skip variable                  | Delivers                                                                                                                                                                                                                               |
-| ---------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `linux`    | — (always on)                  | the everyday utilities (ripgrep, jq, yq under the attr `yq-go`, shellcheck, shfmt, tmux, ffmpeg, …), the Atlassian TWG CLI (`twg`), and the git/gh configuration, SSH-key setup and bash-completion wiring every other bundle leans on |
-| `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                                               |
-| `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                                                     |
-| `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle, Kotlin, Maven, Quarkus, Scala                                                                                                                                                                                      |
-| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                                                     |
-| `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                                                         |
-| `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                                                    |
-| `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                                                              |
-| `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                                                            |
-| `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                                               |
-| `bun`      | `SKIP_USER_INSTALL_BUN=1`      | Bun                                                                                                                                                                                                                                    |
+| Bundle     | Skip variable                  | Delivers                                                                                                                                                                                                                                                        |
+| ---------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `linux`    | — (always on)                  | the everyday utilities (ripgrep, jq, yq under the attr `yq-go`, shellcheck, tmux, ffmpeg, glab — the GitLab CLI, grpcurl, …), the Atlassian TWG CLI (`twg`), and the git/gh configuration, SSH-key setup and bash-completion wiring every other bundle leans on |
+| `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                                                                        |
+| `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                                                                              |
+| `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle 9 (the `gradle_9` attr), Kotlin, Maven, Quarkus, Scala                                                                                                                                                                                       |
+| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                                                                              |
+| `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                                                                                  |
+| `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                                                                             |
+| `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                                                                                       |
+| `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                                                                                     |
+| `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                                                                        |
+| `bun`      | `SKIP_USER_INSTALL_BUN=1`      | Bun                                                                                                                                                                                                                                                             |
 
 Bundle variables shape only the provisioning run: on an
 already-bootstrapped volume they neither install what an earlier
@@ -265,7 +265,9 @@ multiply disk, network and CPU cost — budget accordingly.
   `ssh host <cmd>` (the loader at the top of `/etc/bash.bashrc`, through
   Debian's ssh patch) and a non-interactive `bash -c` under SSH (the
   coding-agent pattern) resolve default-profile tools and carry the mirrored
-  environment. The key and the
+  environment, and that a forced-pty session (`ssh -tt` — the interactive
+  login shell a human gets) activates fnm and resolves Node, the
+  interactive-only carve-out no other SSH surface reaches. The key and the
   port are throwaway and leave no residue: the key directory is deleted in
   teardown, the port dies with the container.
 - `describe("recreate")` (inside `user-install`) protects the `/nix`
@@ -415,6 +417,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Tests stack_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — workflows for coding agents (issue tracker, triage labels, domain docs); start at [AGENTS.md](AGENTS.md)
+- `docs/research/` — tool and package research write-ups behind the workspace decisions (Ruby version managers, git's external dependencies, the Atlassian CLIs, pinned-registry package facts)
 - `.github/` — the CI workflow: pull-request gates (hygiene, full suite) and the Release publisher
 - `.zcode/` — ZCode agent tooling: the DeepWiki MCP server config and the project skills (content in `.agents/skills/`, symlinks in `.zcode/skills/`)
 

@@ -309,6 +309,8 @@ install_nix_profile() {
     nixpkgs#ffmpeg
     nixpkgs#gh
     nixpkgs#git
+    nixpkgs#glab
+    nixpkgs#grpcurl
     nixpkgs#htop
     nixpkgs#jq
     nixpkgs#lz4
@@ -316,7 +318,6 @@ install_nix_profile() {
     nixpkgs#ripgrep
     nixpkgs#rsync
     nixpkgs#shellcheck
-    nixpkgs#shfmt
     nixpkgs#tmux
     nixpkgs#unzip
     nixpkgs#wget
@@ -327,9 +328,12 @@ install_nix_profile() {
 
   bundle_packages DOCKER nixpkgs#docker-client
   bundle_packages GOLANG nixpkgs#go
+  # gradle_9, not gradle: the pinned registry carries both majors side by
+  # side (the default attribute follows the 8 line), and this workspace
+  # explicitly follows the 9 line.
   bundle_packages JAVA \
     nixpkgs#graalvmPackages.graalvm-ce \
-    nixpkgs#gradle \
+    nixpkgs#gradle_9 \
     nixpkgs#kotlin \
     nixpkgs#maven \
     nixpkgs#quarkus \

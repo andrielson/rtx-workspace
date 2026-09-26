@@ -12,12 +12,12 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.11",
+    "@biomejs/biome": "2.5.14",
     "@types/bun": "latest",
     "husky": "9.1.7",
-    "lint-staged": "17.4.1",
-    "prettier": "3.9.6",
-    "prettier-plugin-sh": "0.19.0",
+    "lint-staged": "17.5.1",
+    "prettier": "3.9.9",
+    "prettier-plugin-sh": "0.20.2",
     "typescript": "7.0.2"
   },
   "packageManager": "bun@1.4.2"
