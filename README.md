@@ -253,7 +253,9 @@ multiply disk, network and CPU cost — budget accordingly.
   `ssh host <cmd>` (the loader at the top of `/etc/bash.bashrc`, through
   Debian's ssh patch) and a non-interactive `bash -c` under SSH (the
   coding-agent pattern) resolve default-profile tools and carry the mirrored
-  environment. The key and the
+  environment, and that a forced-pty session (`ssh -tt` — the interactive
+  login shell a human gets) activates fnm and resolves Node, the
+  interactive-only carve-out no other SSH surface reaches. The key and the
   port are throwaway and leave no residue: the key directory is deleted in
   teardown, the port dies with the container.
 - `describe("recreate")` (inside `user-install`) protects the `/nix`
