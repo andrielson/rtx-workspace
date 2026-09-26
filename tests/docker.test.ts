@@ -451,6 +451,17 @@ describe('user-install', () => {
   const sshCommand = async (script: string) =>
     $`ssh ${sshOptions()} ubuntu@${sshHost} ${script}`.text().then((stdout) => stdout.trim())
 
+  // The interactive surface, forced through a pty: with -tt and no remote
+  // command, sshd execs the login shell attached to a terminal — the session
+  // a human gets — so the shell is interactive and ~/.bashrc's interactive
+  // region (fnm's eval) runs, which no other SSH surface reaches. The pty
+  // echoes the piped input back (prompts and all, CRLF endings), so callers
+  // assert with loose matches. The script needs a trailing `exit`: an
+  // interactive shell sitting at its prompt ignores stdin EOF, so the piped
+  // input alone never ends the session.
+  const sshInteractive = async (script: string) =>
+    $`printf '%s\n' ${script} exit | ssh -tt ${sshOptions()} ubuntu@${sshHost}`.text().then((stdout) => stdout.trim())
+
   beforeAll(async () => {
     keyDir = mkdtempSync(join(tmpdir(), 'rtx-workspace-tests-ssh-'))
     keyPath = join(keyDir, 'id_ed25519')
@@ -661,6 +672,19 @@ describe('user-install', () => {
     // call from an SSH shell dies on EACCES at the socket.
     test('a login shell carries the docker socket group', async () => {
       expect((await sshLogin('id --groups')).split(/\s+/)).toContain(env.DOCKER_GID)
+    }, 60_000)
+
+    // The interactive-only carve-out wiring over the real sshd: fnm's eval
+    // lives in ~/.bashrc's interactive region, which only an interactive
+    // session reaches — a plain login or command session stops at the
+    // non-interactive guards, so node resolving here proves the activation
+    // came from that region and not from any PATH hook. The resolved path
+    // carries fnm's fingerprint (the multishell directory its eval prepends
+    // to PATH), and the version line proves the binary runs.
+    test('a forced-pty session activates fnm and resolves node', async () => {
+      const output = await sshInteractive('command -v node && node --version')
+      expect(output).toMatch(/^\/nix\/ubuntu\/\S*fnm\S*\/bin\/node$/m)
+      expect(output).toMatch(/^v\d+\.\d+\.\d+/m)
     }, 60_000)
   })
 
