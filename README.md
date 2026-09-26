@@ -405,6 +405,7 @@ The repository versions ZCode agent tooling alongside the stack itself:
 - `CONTEXT.md` — the project glossary (canonical vocabulary, e.g. _Tests stack_, _Bootstrap script_, _Image contract_)
 - `docs/adr/` — architecture decision records
 - `docs/agents/` — workflows for coding agents (issue tracker, triage labels, domain docs); start at [AGENTS.md](AGENTS.md)
+- `docs/research/` — tool and package research write-ups behind the workspace decisions (Ruby version managers, git's external dependencies, the Atlassian CLIs, pinned-registry package facts)
 - `.github/` — the CI workflow: pull-request gates (hygiene, full suite) and the Release publisher
 - `.zcode/` — ZCode agent tooling: the DeepWiki MCP server config and the project skills (content in `.agents/skills/`, symlinks in `.zcode/skills/`)
 
