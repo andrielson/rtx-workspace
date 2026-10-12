@@ -19,6 +19,11 @@ describe('user-install', () => {
   // All lifts anchor on the definition line and the column-0 closing
   // brace, so Prettier wrapping a body into multiple lines stays harmless.
   const liftHelper = (name: string) => script.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, 'm'))?.[0] ?? ''
+
+  // The always-on (linux) package union: the bare packages+=(...) array of
+  // nixpkgs#-only entry lines, anchored so the bundle_packages helper's
+  // packages+=("${@}") never matches.
+  const alwaysOnPackages = script.match(/packages\+=\(\n((?:\s+nixpkgs#[^\n]+)+)\n\s*\)/)?.[1] ?? ''
   const wrapper = liftHelper('_curl')
   const gate = liftHelper('bundle_enabled')
 
@@ -166,10 +171,6 @@ describe('user-install', () => {
   // bundle_packages() call: a dependency landing behind a skip variable
   // would vanish from volumes provisioned with that bundle skipped.
   describe('linux bundle', () => {
-    // Anchored on nixpkgs#-only entry lines, so the bundle_packages
-    // helper's packages+=("${@}") never matches.
-    const alwaysOnPackages = script.match(/packages\+=\(\n((?:\s+nixpkgs#[^\n]+)+)\n\s*\)/)?.[1] ?? ''
-
     test('package union is found in the Bootstrap script', () => {
       expect(alwaysOnPackages, 'the linux bundle packages block not found in user-install.sh — restructured?').not.toBe(
         '',
@@ -178,6 +179,50 @@ describe('user-install', () => {
 
     test.each(['nixpkgs#less', 'nixpkgs#man-db'])('%s is in the always-on union', (pkg) => {
       expect(alwaysOnPackages).toContain(pkg)
+    })
+  })
+
+  // The ruby bundle's store half: mise rides the RUBY-gated profile union —
+  // the nixpkgs package ships the marker that disables mise self-update, so
+  // unlike the self-rewriting carve-outs it is store-safe by construction —
+  // and its setup wires the interactive activation the fnm precedent set,
+  // enables .ruby-version as an idiomatic version file, and preinstalls a
+  // default Ruby.
+  describe('ruby bundle', () => {
+    const setup = liftHelper('setup_ruby')
+    const bundles = liftHelper('install_bundles')
+
+    test('setup_ruby is found in the Bootstrap script', () => {
+      expect(setup, 'setup_ruby not found in user-install.sh — renamed?').not.toBe('')
+    })
+
+    test('wires mise activation into the interactive init, the fnm pattern', () => {
+      // The whole eval line must land in ~/.bashrc single-quoted:
+      // $(mise activate bash) has to run when an interactive shell sources
+      // the file, never during provisioning.
+      expect(setup).toContain(`'eval "$(mise activate bash)"' >> "\${HOME}/.bashrc"`)
+      expect(setup).toContain(`--fixed-strings 'mise activate bash'`)
+    })
+
+    test('enables .ruby-version as an idiomatic version file and installs the 3.4 default', () => {
+      expect(setup).toContain('mise settings add idiomatic_version_file_enable_tools ruby')
+      expect(setup).toContain('mise use --global ruby@3.4')
+    })
+
+    test('runs after the node bundle and before the bun sentinel', () => {
+      const nodeIndex = bundles.indexOf('run_bundle NODE')
+      const rubyIndex = bundles.indexOf('run_bundle RUBY')
+      const bunIndex = bundles.indexOf('run_bundle BUN')
+      expect(nodeIndex).toBeGreaterThanOrEqual(0)
+      expect(rubyIndex).toBeGreaterThan(nodeIndex)
+      expect(bunIndex).toBeGreaterThan(rubyIndex)
+    })
+
+    test('mise joins the profile through the RUBY-gated union, never the always-on one', () => {
+      expect(script).toContain('bundle_packages RUBY nixpkgs#mise')
+      // mise behind the always-on union would install it on volumes
+      // provisioned with the ruby bundle skipped.
+      expect(alwaysOnPackages).not.toContain('nixpkgs#mise')
     })
   })
 

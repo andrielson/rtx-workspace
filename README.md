@@ -158,6 +158,7 @@ the default sentinel's own bundle):
 | `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `ruby`     | `SKIP_USER_INSTALL_RUBY=1`     | mise and the Ruby 3.4 it manages                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `rust`     | `SKIP_USER_INSTALL_RUST=1`     | rustup and the Rust toolchains it manages                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `claude`   | `SKIP_USER_INSTALL_CLAUDE=1`   | Claude Code                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `opencode` | `SKIP_USER_INSTALL_OPENCODE=1` | OpenCode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -169,14 +170,19 @@ bootstrapped volume skipped nor remove what it installed — provisioning
 runs only while the sentinel command is missing, so a fresh `/nix` volume
 is what a changed bundle configuration needs.
 
-Six **carve-outs** stay outside the read-only Nix store, each through its
-vendor installer: uv (the `python` bundle — the `UV_*` knobs are baked into
+Seven **carve-outs** stay outside the read-only Nix store, each through its
+bundle's install step: uv (the `python` bundle — the `UV_*` knobs are baked into
 the image, with `UV_TORCH_BACKEND=cpu` as the default — CPU torch wheels
 suit the common GPU-less case; override the env for CUDA), the
 self-updating agent CLIs Claude Code and OpenCode (`claude`, `opencode` —
 they rewrite their own binary), Node via fnm (`node`: `fnm install --lts`
 with `lts-latest` as the default, wired interactive-only into `~/.bashrc`
-as nvm was), Bun and Rust (`bun`, `rust`: bun.sh and rustup both release
+as nvm was), Ruby via mise (`ruby`: mise itself rides the profile
+store-safe — the nixpkgs package ships the marker that disables its
+self-update — and installs precompiled glibc Rubies into
+`~/.local/share/mise`, honoring `.ruby-version` through the
+idiomatic-version-file setting and wired interactive-only into `~/.bashrc`
+like fnm), Bun and Rust (`bun`, `rust`: bun.sh and rustup both release
 faster than a pinned profile tracks, and both self-update — `bun upgrade`,
 `rustup update`), and the Atlassian TWG CLI (`linux`: Atlassian's installer
 is the only documented channel, and its built-in upgrader rewrites the
@@ -259,18 +265,18 @@ multiply disk, network and CPU cost — budget accordingly.
   sshd healthcheck (which by construction only turns healthy after
   provisioning finishes), then bare-exec assertions run every
   default-profile tool, the carve-outs coexist (uv, Claude Code, OpenCode,
-  the Atlassian TWG CLI, Bun and Rust via their vendor installers; fnm/Node
-  in an interactive shell), the retired managers leave no
-  remnants, the git-signing setup's token-less path leaves signing
+  the Atlassian TWG CLI, Bun and Rust via their vendor installers;
+  fnm/Node and mise/Ruby in an interactive shell), the retired managers
+  leave no remnants, the git-signing setup's token-less path leaves signing
   unconfigured (the configured path needs a real scoped token writing to a
   real account and stays a manual check — see
   [ADR 0009](docs/adr/0009-bootstrap-issued-git-signing-keys.md)), and a
   container restart proves the already-bootstrapped
   detection skips provisioning on a second boot. Its last block proves the
-  bundle gates end to end: a one-off container bootstraps a fresh volume
-  with `SKIP_USER_INSTALL_JAVA=1` and must land every other bundle (golang
-  through the same profile union, bun as the sentinel's own command) while
-  the skipped bundle's tools stay absent.
+  bundle gates end to end: one-off containers bootstrap fresh volumes with
+  `SKIP_USER_INSTALL_JAVA=1` and `SKIP_USER_INSTALL_RUBY=1` and must land
+  every other bundle (golang through the same profile union, bun as the
+  sentinel's own command) while the skipped bundle's tools stay absent.
 - `describe("SSH surfaces")` (inside `user-install`) proves the remaining
   shell surfaces on the real sshd: the suite generates a throwaway keypair,
   injects the public half through the same `SSH_AUTHORIZED_KEY` env var
@@ -282,9 +288,10 @@ multiply disk, network and CPU cost — budget accordingly.
   Debian's ssh patch) and a non-interactive `bash -c` under SSH (the
   coding-agent pattern) resolve default-profile tools and carry the mirrored
   environment, and that a forced-pty session (`ssh -tt` — the interactive
-  login shell a human gets) activates fnm and resolves Node, the
-  interactive-only carve-out no other SSH surface reaches. The key and the
-  port are throwaway and leave no residue: the key directory is deleted in
+  login shell a human gets) activates fnm and mise and resolves Node and
+  Ruby, the interactive-only carve-outs no other SSH surface reaches. The
+  key and the port are throwaway and leave no residue: the key directory is
+  deleted in
   teardown, the port dies with the container.
 - `describe("recreate")` (inside `user-install`) protects the `/nix`
   volume's persistence promise: the stack comes down keeping volumes and
