@@ -345,6 +345,11 @@ install_nix_profile() {
     nixpkgs#scala
   bundle_packages NODE nixpkgs#fnm
   bundle_packages PHP nixpkgs#php nixpkgs#phpPackages.composer
+  # The one version manager that is store-safe by construction: nixpkgs'
+  # mise ships the marker that disables its self-update, so it joins the
+  # union instead of riding a vendor carve-out (the version-manager research
+  # behind this is docs/research/ruby-version-managers.md).
+  bundle_packages RUBY nixpkgs#mise
 
   nix profile add "${packages[@]}"
 
@@ -481,6 +486,38 @@ setup_node() {
   node --version
 }
 
+setup_ruby() {
+  _log 'Wiring mise into the interactive shell init...'
+
+  # Interactive-only, as Node is: Ruby resolves just for interactive shells.
+  # The eval is single-quoted on purpose: $(mise activate bash) must run when
+  # an interactive shell sources ~/.bashrc, not here. The grep guard keeps a
+  # partial-failure re-run from appending the line twice.
+  # shellcheck disable=SC2016
+  if ! grep --quiet --fixed-strings 'mise activate bash' "${HOME}/.bashrc"; then
+    printf '%s\n' 'eval "$(mise activate bash)"' >> "${HOME}/.bashrc"
+  fi
+
+  # mise reads idiomatic version files (.ruby-version, Gemfile) only for
+  # tools opted in, so ruby joins the list — projects carrying the file
+  # their teammates' managers read just work. The add is idempotent: a
+  # partial-failure re-run finds ruby in the list and writes nothing.
+  _log 'Enabling .ruby-version as an idiomatic version file...'
+  mise settings add idiomatic_version_file_enable_tools ruby
+
+  _log 'Installing Ruby 3.4 through mise...'
+  # Precompiled glibc binaries into ~/.local/share/mise (the home volume,
+  # outside the read-only store) — the fnm shape, with mise scoped to Ruby.
+  mise use --global ruby@3.4
+
+  # Smoke-test the default Ruby the same way the .bashrc snippet loads it:
+  # the activation is evaluated for its side effects, and mise puts the
+  # global 3.4's install bin on PATH.
+  # shellcheck disable=SC2312
+  eval "$(mise activate bash)"
+  ruby --version
+}
+
 install_bundles() {
   install_nix_profile
 
@@ -507,6 +544,7 @@ install_bundles() {
   run_bundle CLAUDE install_claude_code
   run_bundle OPENCODE install_opencode
   run_bundle NODE setup_node
+  run_bundle RUBY setup_ruby
   run_bundle BUN install_bun
 }
 

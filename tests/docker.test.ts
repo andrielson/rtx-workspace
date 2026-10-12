@@ -379,6 +379,11 @@ describe('user-install', () => {
   const execInteractive = async (script: string) =>
     $`docker exec --user ubuntu ${container} bash -ic ${script}`.text().then((stdout) => stdout.trim())
 
+  // mise prints a bare dated version (year.month.patch) on stdout; the
+  // available-update notice it emits goes to stderr, which .text() drops —
+  // the profile row and the SSH-surface test both match against this.
+  const miseVersion = /^\d{4}\.\d+\.\d+/
+
   // The SSH-surface harness. A throwaway keypair is generated on the test
   // host; its public half rides the existing SSH_AUTHORIZED_KEY env var —
   // the Tests stack declares it under `environment`, so compose interpolates
@@ -531,6 +536,7 @@ describe('user-install', () => {
       ['docker --version', /^Docker version \d+/],
       ['docker compose version', /Docker Compose version v?\d+\.\d+/],
       ['fnm --version', /^fnm \d+/],
+      ['mise --version', miseVersion],
       ['ffmpeg -version', /^ffmpeg version \d+/],
       ['rg --version', /^ripgrep \d+/],
       ['rsync --version', /^rsync\s+version \d+/],
@@ -578,15 +584,43 @@ describe('user-install', () => {
       expect(await execInteractive('node --version')).toMatch(/^v\d+\.\d+\.\d+/)
     }, 120_000)
 
-    test('fnm, node, profile tools and the carve-outs coexist in one shell', async () => {
+    test("ruby resolves in an interactive shell with mise's 3.4 default", async () => {
+      expect(await execInteractive('ruby --version')).toMatch(/^ruby 3\.4\.\d+/)
+    }, 120_000)
+
+    test('mise honors .ruby-version as an idiomatic version file', async () => {
+      // The opt-in setting first (the parenthetical of the acceptance
+      // criterion), then the end-to-end half: a .ruby-version pinning the
+      // full patch version — resolved through mise, since the global config
+      // only carries the 3.4 alias — must switch resolution onto that
+      // version's own install dir, a path the bare alias never produces.
+      // mise's activation wraps cd, so entering the directory re-resolves
+      // even under bash -ic's non-tty prompt.
+      expect(await execBare('mise settings get idiomatic_version_file_enable_tools')).toBe('["ruby"]')
+      const resolved = await execInteractive(`v="$(mise current ruby)"
+        d="$(mktemp --directory)"
+        printf '%s\\n' "$v" > "$d/.ruby-version"
+        cd "$d"
+        command -v ruby`)
+      expect(resolved).toMatch(/\/installs\/ruby\/3\.4\.\d+\/bin\/ruby$/)
+    }, 120_000)
+
+    test('fnm, node, mise, ruby, profile tools and the carve-outs coexist in one shell', async () => {
       // command -v exits non-zero when any named command is missing, so
-      // resolving all seven at once is the check — one shell carrying the
-      // Nix profile, fnm's Node, and the store-outside carve-outs.
-      expect((await execInteractive('command -v node java fnm uv claude opencode twg')).split('\n')).toHaveLength(7)
+      // resolving all nine at once is the check — one shell carrying the
+      // Nix profile, fnm's Node, mise's Ruby, and the store-outside
+      // carve-outs.
+      expect(
+        (await execInteractive('command -v node java fnm mise ruby uv claude opencode twg')).split('\n'),
+      ).toHaveLength(9)
     }, 120_000)
 
     test('node stays interactive-only, as nvm was', async () => {
       expect(await execBare('command -v node || true')).toBe('')
+    }, 60_000)
+
+    test('ruby stays interactive-only, as node is', async () => {
+      expect(await execBare('command -v ruby || true')).toBe('')
     }, 60_000)
   })
 
@@ -716,6 +750,25 @@ describe('user-install', () => {
       const output = await sshInteractive('command -v node && node --version')
       expect(output).toMatch(/^\/nix\/ubuntu\/\S*fnm\S*\/bin\/node$/m)
       expect(output).toMatch(/^v\d+\.\d+\.\d+/m)
+    }, 60_000)
+
+    // mise rides the profile bin like every default-profile tool, so the
+    // manager itself must resolve on both real SSH surfaces — only the
+    // Rubies it manages stay interactive-only.
+    test('mise resolves and runs on the SSH surfaces', async () => {
+      expect(await sshLogin('command -v mise')).toBe('/nix/ubuntu/.nix-profile/bin/mise')
+      expect(await sshCommand('mise --version')).toMatch(miseVersion)
+    }, 60_000)
+
+    // The same interactive-only wiring for Ruby: mise's activation sits in
+    // ~/.bashrc's interactive region next to fnm's, and the resolved path
+    // carries mise's fingerprint (the installs directory under
+    // ~/.local/share/mise, outside the read-only store), with the version
+    // line proving the precompiled binary runs.
+    test('a forced-pty session activates mise and resolves ruby', async () => {
+      const output = await sshInteractive('command -v ruby && ruby --version')
+      expect(output).toMatch(/^\/nix\/ubuntu\/\.local\/share\/mise\/\S+\/bin\/ruby$/m)
+      expect(output).toMatch(/^ruby 3\.4\.\d+/m)
     }, 60_000)
   })
 
@@ -861,9 +914,9 @@ describe('user-install', () => {
       expect(logs).not.toContain(bootstrapMarker)
 
       // …every default-profile tool and carve-out still resolves, one
-      // command per name (node stays interactive-only, as ever)…
+      // command per name (node and ruby stay interactive-only, as ever)…
       const tools =
-        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git acli glab grpcurl yq shellcheck docker fnm ffmpeg rg rsync tmux jq uv claude opencode twg'.split(
+        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git acli glab grpcurl yq shellcheck docker fnm mise ffmpeg rg rsync tmux jq uv claude opencode twg'.split(
           ' ',
         )
       const paths = (await execBare(`command -v ${tools.join(' ')}`)).split('\n')
@@ -883,11 +936,14 @@ describe('user-install', () => {
 
   // The bundle gates end to end: a fresh volume provisioned with one
   // bundle's skip variable set must land every other bundle and leave the
-  // skipped bundle's tools absent. Java is the skipped one — the heaviest
-  // profile slice, so the boot also shows the skip paying for itself — and
-  // golang and bun stand in for what must survive it: a sibling profile
-  // bundle (the union installed the enabled packages anyway) and the last
-  // vendor bundle (the tail completed, sentinel included).
+  // skipped bundle's tools absent. Java is one skipped bundle — the
+  // heaviest profile slice, so the boot also shows the skip paying for
+  // itself — and golang and bun stand in for what must survive it: a
+  // sibling profile bundle (the union installed the enabled packages
+  // anyway) and the last vendor bundle (the tail completed, sentinel
+  // included). Ruby is the other: its manager never joins the profile
+  // union, and the interactive surface its activation wires must resolve
+  // nothing either.
   describe('bundle skips', () => {
     const skipContainer = `${project}-skip-bundle`
 
@@ -896,37 +952,48 @@ describe('user-install', () => {
     const execSkip = async (script: string) =>
       $`docker exec ${skipContainer} bash -c ${script}`.text().then((stdout) => stdout.trim())
 
-    test('SKIP_USER_INSTALL_JAVA=1 provisions the rest without the java bundle', async () => {
-      // The project volume already carries a bootstrapped profile from the
-      // blocks above, and the bundle variables shape provisioning only —
-      // they never remove from a provisioned volume. So this last block
-      // resets the whole project (volumes included) before its one-off
-      // boot; nothing after it depends on the torn-down state.
-      await $`${compose} down --volumes --remove-orphans`.env(env).quiet()
+    // The interactive surface in the same shape: as ubuntu, so ~/.bashrc —
+    // where the skipped bundle's activation line would live — is sourced
+    // (bash has no long form for -i either). The job-control noise bash
+    // prints without a tty goes to stderr.
+    const execSkipInteractive = async (script: string) =>
+      $`docker exec --user ubuntu ${skipContainer} bash -ic ${script}`.text().then((stdout) => stdout.trim())
 
+    // Provisioning gates sshd (the entrypoint execs it only once the
+    // bootstrap finishes), so sshd answering inside the container is
+    // itself the provisioning-done probe — the same probe the healthcheck
+    // uses (bash has no long form for -c; /dev/tcp has no long form at
+    // all). nothrow() resolves the exit code instead of throwing on the
+    // failed probes that make up the polling.
+    const waitForProvisioning = async () => {
+      const probe = 'exec 3<>/dev/tcp/127.0.0.1/22'
+      const probeOk = async () =>
+        (await $`docker exec ${skipContainer} bash -c ${probe}`.nothrow().quiet()).exitCode === 0
+      const deadline = Date.now() + 900_000
+      while (!(await probeOk())) {
+        if (Date.now() > deadline) throw new Error(`sshd never came up in ${skipContainer}`)
+        await Bun.sleep(1_000)
+      }
+    }
+
+    // The shared boot shape of both tests: reset the project (volumes
+    // included — the bundle variables shape provisioning only, never a
+    // provisioned volume), then one fresh one-off under the skip variable.
+    const bootSkipContainer = async (skipVariable: string) => {
+      await $`${compose} down --volumes --remove-orphans`.env(env).quiet()
       // compose run (no --no-deps): nginx starts as the run's dependency
       // and serves the Web root this tree built, the one this boot fetches
-      // the Bootstrap script from. --env injects the skip variable into
-      // the one-off's environment. Defensive teardown first: a failed
+      // the Bootstrap script from. Defensive teardown first: a failed
       // prior run may have left the container behind.
       await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
-      await $`${compose} run --detach --name ${skipContainer} --env SKIP_USER_INSTALL_JAVA=1 workspace`.env(env).quiet()
+      await $`${compose} run --detach --name ${skipContainer} --env ${skipVariable} workspace`.env(env).quiet()
+    }
+
+    test('SKIP_USER_INSTALL_JAVA=1 provisions the rest without the java bundle', async () => {
+      await bootSkipContainer('SKIP_USER_INSTALL_JAVA=1')
 
       try {
-        // Provisioning gates sshd (the entrypoint execs it only once the
-        // bootstrap finishes), so sshd answering inside the container is
-        // itself the provisioning-done probe — the same probe the
-        // healthcheck uses (bash has no long form for -c; /dev/tcp has no
-        // long form at all). nothrow() resolves the exit code instead of
-        // throwing on the failed probes that make up the polling.
-        const probe = 'exec 3<>/dev/tcp/127.0.0.1/22'
-        const probeOk = async () =>
-          (await $`docker exec ${skipContainer} bash -c ${probe}`.nothrow().quiet()).exitCode === 0
-        const deadline = Date.now() + 900_000
-        while (!(await probeOk())) {
-          if (Date.now() > deadline) throw new Error(`sshd never came up in ${skipContainer}`)
-          await Bun.sleep(1_000)
-        }
+        await waitForProvisioning()
 
         // The bootstrap did run — the marker, not the global skip — and it
         // said so about the skipped bundle, under the exact variable name.
@@ -939,6 +1006,30 @@ describe('user-install', () => {
         // bundle (bun, the default sentinel's own command) did.
         expect(await execSkip('command -v java || true')).toBe('')
         expect(await execSkip('go version')).toMatch(/^go version go\d+\.\d+/)
+        expect(await execSkip('bun --version')).toMatch(/^\d+\.\d+/)
+      } finally {
+        await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
+      }
+    }, 960_000)
+
+    test('SKIP_USER_INSTALL_RUBY=1 provisions the rest without the ruby bundle', async () => {
+      await bootSkipContainer('SKIP_USER_INSTALL_RUBY=1')
+
+      try {
+        await waitForProvisioning()
+
+        const logs = await $`docker logs ${skipContainer}`.text()
+        expect(logs).toContain(bootstrapMarker)
+        expect(logs).toContain('Skipping the RUBY bundle (SKIP_USER_INSTALL_RUBY=1).')
+
+        // …mise never joined the profile union (the bare surface rides the
+        // image ENV PATH hook, so its absence is the union's omission),
+        // and no interactive shell resolves ruby either — the bundle that
+        // would wire the activation is the skipped one. The node bundle's
+        // manager and the bun sentinel prove the rest completed.
+        expect(await execSkip('command -v mise || true')).toBe('')
+        expect(await execSkipInteractive('command -v ruby || true')).toBe('')
+        expect(await execSkip('fnm --version')).toMatch(/^fnm \d+/)
         expect(await execSkip('bun --version')).toMatch(/^\d+\.\d+/)
       } finally {
         await $`docker rm --force --volumes ${skipContainer}`.nothrow().quiet()
