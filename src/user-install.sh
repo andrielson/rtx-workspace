@@ -414,7 +414,7 @@ install_claude_code() {
 install_opencode() {
   _log 'Installing OpenCode...'
   # bash has no long option for -s (read the installer from stdin).
-  _curl https://opencode.ai/install | bash -s -- --no-modify-path
+  _curl https://opencode.ai/v2/install | bash -s -- --no-modify-path
   ln --verbose --symbolic "${HOME}"/.opencode/bin/* "${HOME}/.local/bin/"
 }
 
