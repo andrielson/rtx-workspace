@@ -484,6 +484,26 @@ setup_node() {
   # shellcheck disable=SC2312
   eval "$(fnm env --shell bash)"
   node --version
+
+  # Corepack ships inside fnm's Node — the exact Node this bundle manages —
+  # so nothing joins the Nix profile for it (the nixpkgs one would always
+  # run nix's node through its patched shebang). enable lands the
+  # pnpm/yarn shims next to corepack itself — realpathed into the Node
+  # installation's bin, where every later interactive shell finds them —
+  # and is idempotent by design. The shims live inside one Node version's
+  # installation, so a Node version installed later needs `corepack
+  # enable` again (noted in the README).
+  _log 'Enabling corepack (pnpm and yarn shims)...'
+  corepack enable
+
+  # install --global pre-downloads both package managers into corepack's
+  # cache and pins them as the defaults used outside projects with a
+  # packageManager field, so the first pnpm/yarn call never waits on a
+  # download. COREPACK_ENABLE_DOWNLOAD_PROMPT=0 (image ENV, the UV_*
+  # precedent) keeps even these installs prompt-free: first boot has no
+  # tty for corepack's Y/n confirmation.
+  _log 'Pre-installing pnpm and yarn as corepack global defaults...'
+  corepack install --global pnpm@latest yarn@latest
 }
 
 setup_ruby() {

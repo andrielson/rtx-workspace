@@ -155,7 +155,7 @@ the default sentinel's own bundle):
 | `docker`   | `SKIP_USER_INSTALL_DOCKER=1`   | the docker CLI (compose plugin included)                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `golang`   | `SKIP_USER_INSTALL_GOLANG=1`   | Go                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `java`     | `SKIP_USER_INSTALL_JAVA=1`     | GraalVM CE, Gradle 9 (the `gradle_9` attr), Kotlin, Maven, Quarkus, Scala                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm and the Node.js LTS it manages                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `node`     | `SKIP_USER_INSTALL_NODE=1`     | fnm, the Node.js LTS it manages, and corepack's pnpm and yarn (shims enabled, both pre-installed as the global defaults)                                                                                                                                                                                                                                                                                                                                                                                               |
 | `php`      | `SKIP_USER_INSTALL_PHP=1`      | PHP + Composer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `python`   | `SKIP_USER_INSTALL_PYTHON=1`   | uv, the Python it manages, ruff, ty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `ruby`     | `SKIP_USER_INSTALL_RUBY=1`     | mise and the Ruby 3.4 it manages                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -177,12 +177,19 @@ suit the common GPU-less case; override the env for CUDA), the
 self-updating agent CLIs Claude Code and OpenCode (`claude`, `opencode` —
 they rewrite their own binary), Node via fnm (`node`: `fnm install --lts`
 with `lts-latest` as the default, wired interactive-only into `~/.bashrc`
-as nvm was), Ruby via mise (`ruby`: mise itself rides the profile
-store-safe — the nixpkgs package ships the marker that disables its
-self-update — and installs precompiled glibc Rubies into
-`~/.local/share/mise`, honoring `.ruby-version` through the
-idiomatic-version-file setting and wired interactive-only into `~/.bashrc`
-like fnm), Bun and Rust (`bun`, `rust`: bun.sh and rustup both release
+as nvm was — corepack ships inside that Node, so the same bundle enables
+its pnpm and yarn shims and pre-installs both as the global defaults used
+outside projects with a `packageManager` field, with
+`COREPACK_ENABLE_DOWNLOAD_PROMPT=0` baked into the image so a first
+download never blocks a non-TTY shell on corepack's Y/n confirmation; the
+shims live inside one Node version's installation, so a Node version
+installed later needs `corepack enable` again), Ruby via mise (`ruby`:
+mise itself rides the profile store-safe — the nixpkgs package ships the
+marker that disables its self-update — and installs precompiled glibc
+Rubies into `~/.local/share/mise`, honoring `.ruby-version` through the
+idiomatic-version-file setting and wired interactive-only into
+`~/.bashrc` like fnm), Bun and Rust (`bun`, `rust`: bun.sh and rustup
+both release
 faster than a pinned profile tracks, and both self-update — `bun upgrade`,
 `rustup update`), and the Atlassian TWG CLI (`linux`: Atlassian's installer
 is the only documented channel, and its built-in upgrader rewrites the
@@ -266,7 +273,8 @@ multiply disk, network and CPU cost — budget accordingly.
   provisioning finishes), then bare-exec assertions run every
   default-profile tool, the carve-outs coexist (uv, Claude Code, OpenCode,
   the Atlassian TWG CLI, Bun and Rust via their vendor installers;
-  fnm/Node and mise/Ruby in an interactive shell), the retired managers
+  fnm/Node — with corepack's pnpm and yarn pre-installed as its global
+  defaults — and mise/Ruby in an interactive shell), the retired managers
   leave no remnants, the git-signing setup's token-less path leaves signing
   unconfigured (the configured path needs a real scoped token writing to a
   real account and stays a manual check — see
@@ -288,10 +296,10 @@ multiply disk, network and CPU cost — budget accordingly.
   Debian's ssh patch) and a non-interactive `bash -c` under SSH (the
   coding-agent pattern) resolve default-profile tools and carry the mirrored
   environment, and that a forced-pty session (`ssh -tt` — the interactive
-  login shell a human gets) activates fnm and mise and resolves Node and
-  Ruby, the interactive-only carve-outs no other SSH surface reaches. The
-  key and the port are throwaway and leave no residue: the key directory is
-  deleted in
+  login shell a human gets) activates fnm and mise and resolves Node —
+  with corepack's pnpm and yarn beside it — and Ruby, the interactive-only
+  carve-outs no other SSH surface reaches. The key and the
+  port are throwaway and leave no residue: the key directory is deleted in
   teardown, the port dies with the container.
 - `describe("recreate")` (inside `user-install`) protects the `/nix`
   volume's persistence promise: the stack comes down keeping volumes and

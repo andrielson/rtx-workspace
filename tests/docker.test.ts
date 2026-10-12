@@ -33,6 +33,13 @@ const env = {
 // user-install.sh) — its absence proves a boot skipped provisioning.
 const bootstrapMarker = 'Installing the default Nix profile'
 
+// The resolved shape of a binary inside fnm's Node installation: a path
+// under the home whose fnm-controlled directory ends in its /bin name —
+// what `command -v` prints on every surface that activated fnm. The m flag
+// keeps ^/$ per-line for the CRLF the pty surface prints; single-line
+// matches read it the same either way.
+const fnmBin = (name: string) => new RegExp(`^/nix/ubuntu/\\S*fnm\\S*/bin/${name}$`, 'm')
+
 // bun:test kills hooks after 5s by default; the --pull build fetches base
 // images over the network and can take far longer, so every hook carries an
 // explicit timeout.
@@ -153,8 +160,13 @@ describe('Dockerfile', () => {
     })
 
     // The UV_* defaults stay baked: uv installs through its official
-    // installer outside the read-only store, so the image carries its knobs.
+    // installer outside the read-only store, so the image carries its
+    // knobs. COREPACK_ENABLE_DOWNLOAD_PROMPT rides the same reasoning:
+    // corepack downloads its package managers outside the store too, and
+    // the prompt must stay off so a first download never blocks a
+    // non-TTY shell.
     test.each([
+      ['COREPACK_ENABLE_DOWNLOAD_PROMPT', '0'],
       ['UV_COMPILE_BYTECODE', '1'],
       ['UV_MALWARE_CHECK', '1'],
       ['UV_MANAGED_PYTHON', '1'],
@@ -605,14 +617,16 @@ describe('user-install', () => {
       expect(resolved).toMatch(/\/installs\/ruby\/3\.4\.\d+\/bin\/ruby$/)
     }, 120_000)
 
-    test('fnm, node, mise, ruby, profile tools and the carve-outs coexist in one shell', async () => {
+    test('fnm, node, its package managers, mise, ruby, profile tools and the carve-outs coexist in one shell', async () => {
       // command -v exits non-zero when any named command is missing, so
-      // resolving all nine at once is the check — one shell carrying the
-      // Nix profile, fnm's Node, mise's Ruby, and the store-outside
-      // carve-outs.
+      // resolving all twelve at once is the check — one shell carrying the
+      // Nix profile, fnm's Node with corepack's pnpm and yarn, mise's
+      // Ruby, and the store-outside carve-outs.
       expect(
-        (await execInteractive('command -v node java fnm mise ruby uv claude opencode twg')).split('\n'),
-      ).toHaveLength(9)
+        (await execInteractive('command -v node java fnm mise ruby uv claude opencode twg corepack pnpm yarn')).split(
+          '\n',
+        ),
+      ).toHaveLength(12)
     }, 120_000)
 
     test('node stays interactive-only, as nvm was', async () => {
@@ -621,6 +635,46 @@ describe('user-install', () => {
 
     test('ruby stays interactive-only, as node is', async () => {
       expect(await execBare('command -v ruby || true')).toBe('')
+    }, 60_000)
+
+    // Corepack ships inside fnm's Node, so the node bundle makes the
+    // three package-manager binaries real with zero nix duplication:
+    // enable wrote the pnpm/yarn shims next to corepack (inside the Node
+    // installation, so they persist with the volume), and install
+    // --global pre-downloaded both as the defaults used outside projects
+    // with a packageManager field. All three ride node's interactive-only
+    // PATH, like node itself.
+    test('corepack, pnpm and yarn resolve inside fnm in the interactive shell', async () => {
+      for (const name of ['corepack', 'pnpm', 'yarn']) {
+        expect(await execInteractive(`command -v ${name}`)).toMatch(fnmBin(name))
+      }
+      expect(await execInteractive('corepack --version')).toMatch(/^\d+\.\d+/)
+    }, 120_000)
+
+    test('pnpm and yarn run from the pre-installed defaults — no first-use download', async () => {
+      // corepack announces a download ("Installing pnpm@…") on stdout —
+      // the only stream this surface captures — ahead of any version it
+      // must fetch; the whole-output match leaves no room for one — the
+      // versions come straight from the cache the bootstrap's
+      // `corepack install --global` filled.
+      expect(await execInteractive('pnpm --version')).toMatch(/^\d+\.\d+\.\d+$/)
+      expect(await execInteractive('yarn --version')).toMatch(/^\d+\.\d+\.\d+$/)
+    }, 120_000)
+
+    test('the bootstrap pinned both as corepack global defaults', async () => {
+      // lastKnownGood.json is corepack's record of the versions
+      // `corepack install --global` activated — the defaults outside
+      // projects with a packageManager field.
+      const pinned = JSON.parse(await execBare('cat /nix/ubuntu/.cache/node/corepack/lastKnownGood.json')) as Record<
+        string,
+        string
+      >
+      expect(pinned.pnpm).toMatch(/^\d+\.\d+/)
+      expect(pinned.yarn).toMatch(/^\d+\.\d+/)
+    }, 60_000)
+
+    test('corepack, pnpm and yarn stay interactive-only with node', async () => {
+      expect(await execBare('command -v corepack pnpm yarn || true')).toBe('')
     }, 60_000)
   })
 
@@ -748,7 +802,7 @@ describe('user-install', () => {
     // to PATH), and the version line proves the binary runs.
     test('a forced-pty session activates fnm and resolves node', async () => {
       const output = await sshInteractive('command -v node && node --version')
-      expect(output).toMatch(/^\/nix\/ubuntu\/\S*fnm\S*\/bin\/node$/m)
+      expect(output).toMatch(fnmBin('node'))
       expect(output).toMatch(/^v\d+\.\d+\.\d+/m)
     }, 60_000)
 
@@ -769,6 +823,25 @@ describe('user-install', () => {
       const output = await sshInteractive('command -v ruby && ruby --version')
       expect(output).toMatch(/^\/nix\/ubuntu\/\.local\/share\/mise\/\S+\/bin\/ruby$/m)
       expect(output).toMatch(/^ruby 3\.4\.\d+/m)
+    }, 60_000)
+
+    // The node bundle's package managers on the same interactive surface:
+    // corepack's shims ride node's fnm PATH, and the versions must come
+    // from the pre-installed global defaults. The pty echoes the piped
+    // input back (prompts and all, CRLF endings), so the second test
+    // counts bare semver lines rather than positions — corepack announces
+    // a download ahead of any version it must fetch, so exactly two (and
+    // no banner) proves none happened.
+    test('a forced-pty session resolves corepack, pnpm and yarn', async () => {
+      const output = await sshInteractive('command -v corepack pnpm yarn')
+      for (const name of ['corepack', 'pnpm', 'yarn']) {
+        expect(output).toMatch(fnmBin(name))
+      }
+    }, 60_000)
+
+    test('a forced-pty session runs pnpm and yarn without a first-use download', async () => {
+      const output = await sshInteractive('pnpm --version && yarn --version')
+      expect(output.match(/^\d+\.\d+\.\d+$/gm)).toHaveLength(2)
     }, 60_000)
   })
 
