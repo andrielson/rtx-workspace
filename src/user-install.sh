@@ -413,8 +413,33 @@ install_claude_code() {
 
 install_opencode() {
   _log 'Installing OpenCode...'
-  # bash has no long option for -s (read the installer from stdin).
-  _curl https://opencode.ai/v2/install | bash -s -- --no-modify-path
+  # The v2 installer resolves its version through opencode.ai's update API
+  # and its tarball through the npm registry, each with a single unretried
+  # curl of its own — a transient 5xx on either (one observed outage served
+  # a 500 on the update API for minutes) aborts it with "Failed to fetch
+  # version information" before it has touched anything, the same
+  # vendor-endpoint fragility _curl's retries absorb on the fetch side of
+  # every other pipe. Re-running the installer is the missing retry for the
+  # run side: it is idempotent (same INSTALL_DIR, overwrite in place), and
+  # its transient failures precede its first side effect, so ten attempts
+  # five seconds apart ride out the window the way _curl's retries do.
+  local attempt
+  for attempt in {1..10}; do
+    # The if context keeps set -e off the tested pipeline — a failed
+    # attempt is the loop's business, not a boot abort (hence the SC2310
+    # disable, like every bundle_enabled call site). bash has no long
+    # option for -s (read the installer from stdin).
+    # shellcheck disable=SC2310
+    if _curl https://opencode.ai/v2/install | bash -s -- --no-modify-path; then
+      break
+    fi
+    if [[ ${attempt} -eq 10 ]]; then
+      echo 'The OpenCode installer failed after 10 attempts.' >&2
+      exit 1
+    fi
+    _log "The OpenCode installer failed (attempt ${attempt} of 10); retrying in 5 seconds..."
+    sleep 5
+  done
   ln --verbose --symbolic "${HOME}"/.opencode/bin/* "${HOME}/.local/bin/"
 }
 
