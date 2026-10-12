@@ -556,7 +556,7 @@ describe('user-install', () => {
     test.each([
       ['uv --version', /^uv \d+/],
       ['claude --version', /Claude Code/],
-      ['opencode --version', /^\d+\.\d+\.\d+$/],
+      ['opencode --version', /^opencode v\d+\.\d+\.\d+$/],
       ['twg --version', /^\d+\.\d+\.\d+$/],
     ])(
       '%s runs outside the store',
