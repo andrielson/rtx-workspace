@@ -37,9 +37,13 @@ FROM ubuntu:26.04 AS scratch-root
 
 # The UV_* knobs stay baked: uv keeps installing through its official
 # installer outside the read-only Nix store, and these defaults are
-# user-independent.
+# user-independent. COREPACK_ENABLE_DOWNLOAD_PROMPT joins them for the
+# same reason: corepack downloads its package managers outside the store
+# too, and a first download must never block a non-TTY shell (the coding
+# agents' Bash tools, the tty-less first boot) on the Y/n confirmation.
 ENV BUN_INSTALL="/nix/ubuntu/.local" \
   CARGO_HOME="/nix/ubuntu/.cargo" \
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   RUSTUP_HOME="/nix/ubuntu/.rustup" \
   UV_COMPILE_BYTECODE=1 \
   UV_MALWARE_CHECK=1 \
