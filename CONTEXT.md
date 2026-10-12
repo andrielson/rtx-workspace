@@ -33,7 +33,7 @@ The single static script wired into every shell-activation surface — login she
 _Avoid_: hook, profile script
 
 **Default profile**:
-The Nix profile the Bootstrap script installs in one unattended `nix profile add` of the union of the enabled bundles' `nixpkgs#` packages (the flake-registry shorthand resolves to nixpkgs-unstable); `yq` rides under the nixpkgs attr `yq-go`.
+The Nix profile the Bootstrap script installs in one unattended pure `nix profile add` of the union of the enabled bundles' `nixpkgs#` packages (the flake-registry shorthand resolves to nixpkgs-unstable), plus exactly one dedicated impure add for the unfree `acli` — the ADR 0003 escape hatch, whose flags would taint the union they joined; `yq` rides under the nixpkgs attr `yq-go`.
 _Avoid_: tool set, package list
 
 **Carve-outs**:
