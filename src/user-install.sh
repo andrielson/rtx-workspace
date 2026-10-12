@@ -300,7 +300,9 @@ install_nix_profile() {
   # linux — the always-on bundle, with no skip variable: every other bundle
   # leans on it (curl for the vendor installers, git and gh for setup_git,
   # unzip for bun's archive), and its steps wire the interactive shell and
-  # the SSH surface below.
+  # the SSH surface below. less and man-db ride along as git's external
+  # runtime dependencies: the default pager and the man reader git execs,
+  # both resolved from PATH.
   packages+=(
     nixpkgs#bash-completion
     nixpkgs#brotli
@@ -309,14 +311,17 @@ install_nix_profile() {
     nixpkgs#ffmpeg
     nixpkgs#gh
     nixpkgs#git
+    nixpkgs#glab
+    nixpkgs#grpcurl
     nixpkgs#htop
     nixpkgs#jq
+    nixpkgs#less
     nixpkgs#lz4
+    nixpkgs#man-db
     nixpkgs#nano
     nixpkgs#ripgrep
     nixpkgs#rsync
     nixpkgs#shellcheck
-    nixpkgs#shfmt
     nixpkgs#tmux
     nixpkgs#unzip
     nixpkgs#wget
@@ -327,9 +332,12 @@ install_nix_profile() {
 
   bundle_packages DOCKER nixpkgs#docker-client
   bundle_packages GOLANG nixpkgs#go
+  # gradle_9, not gradle: the pinned registry carries both majors side by
+  # side (the default attribute follows the 8 line), and this workspace
+  # explicitly follows the 9 line.
   bundle_packages JAVA \
     nixpkgs#graalvmPackages.graalvm-ce \
-    nixpkgs#gradle \
+    nixpkgs#gradle_9 \
     nixpkgs#kotlin \
     nixpkgs#maven \
     nixpkgs#quarkus \
@@ -352,6 +360,24 @@ setup_completions() {
   if ! grep --quiet --fixed-strings 'share/bash-completion/bash_completion' "${HOME}/.bashrc"; then
     printf '%s\n' 'source "${HOME}/.nix-profile/share/bash-completion/bash_completion"' >> "${HOME}/.bashrc"
   fi
+}
+
+# The Atlassian TWG CLI (binary twg), the linux bundle's vendor carve-out:
+# its built-in upgrader rewrites the installed binary, which a read-only
+# store path forbids (ADR 0003's agent-CLI criterion), so Atlassian's
+# documented installer lands it in ~/.local/bin instead. Always on like the
+# rest of the bundle, so it takes no skip variable. Stable channel, unpinned,
+# like every other vendor carve-out; the installer verifies the CDN's
+# SHA256SUMS and publishes both linux architectures.
+install_twg() {
+  _log 'Installing the Atlassian TWG CLI...'
+  # bash has no long option for -s (read the installer from stdin). The
+  # flags keep the install unattended — first boot runs with no tty:
+  # consent (--yes), no OAuth login (twg login reads /dev/tty; the user
+  # authenticates afterwards, through TWG_TOKEN/TWG_USER or an interactive
+  # login), and no agent-skills writes into the agent harness homes (their
+  # bundles are skippable and may not exist).
+  _curl https://teamwork-graph.atlassian.com/cli/install | bash -s -- --yes --skip-login --skip-skills
 }
 
 install_bun() {
@@ -421,11 +447,16 @@ install_bundles() {
 
   # The linux bundle's setup steps, always on like its packages: completions
   # for the interactive shell, git and gh configured against GitHub, the SSH
-  # surface. They precede the vendor bundles because nothing down the line
-  # depends on those, while setup_git needs the just-landed profile.
+  # surface, and the bundle's own vendor carve-out, the TWG CLI. They
+  # precede the vendor bundles because nothing down the line depends on
+  # those, while setup_git and the TWG installer need the just-landed
+  # profile's curl. A failure here aborts the boot before the bun sentinel,
+  # so the next boot retries — the same partial-failure semantics as every
+  # other step.
   setup_completions
   setup_git
   setup_ssh
+  install_twg
 
   # The vendor bundles, in a fixed order that ends with bun: the entrypoint
   # names bun as its default bootstrap sentinel

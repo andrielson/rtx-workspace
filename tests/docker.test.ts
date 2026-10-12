@@ -364,9 +364,9 @@ describe('user-install', () => {
 
   // The plainest surface: docker exec with no --user, resolved purely by the
   // image ENV (PATH hook #1 of 3). The bash -c wrapper only merges stderr
-  // for tools that print their version there (kotlin, scala); bash has no
-  // long-form options for -c, and the wrapper sources no init files, so
-  // PATH resolution is identical to a bare exec.
+  // for tools that print their version there (grpcurl, kotlin, scala); bash
+  // has no long-form options for -c, and the wrapper sources no init files,
+  // so PATH resolution is identical to a bare exec.
   const execBare = async (script: string) =>
     $`docker exec ${container} bash -c ${script}`.text().then((stdout) => stdout.trim())
 
@@ -451,6 +451,17 @@ describe('user-install', () => {
   const sshCommand = async (script: string) =>
     $`ssh ${sshOptions()} ubuntu@${sshHost} ${script}`.text().then((stdout) => stdout.trim())
 
+  // The interactive surface, forced through a pty: with -tt and no remote
+  // command, sshd execs the login shell attached to a terminal — the session
+  // a human gets — so the shell is interactive and ~/.bashrc's interactive
+  // region (fnm's eval) runs, which no other SSH surface reaches. The pty
+  // echoes the piped input back (prompts and all, CRLF endings), so callers
+  // assert with loose matches. The script needs a trailing `exit`: an
+  // interactive shell sitting at its prompt ignores stdin EOF, so the piped
+  // input alone never ends the session.
+  const sshInteractive = async (script: string) =>
+    $`printf '%s\n' ${script} exit | ssh -tt ${sshOptions()} ubuntu@${sshHost}`.text().then((stdout) => stdout.trim())
+
   beforeAll(async () => {
     keyDir = mkdtempSync(join(tmpdir(), 'rtx-workspace-tests-ssh-'))
     keyPath = join(keyDir, 'id_ed25519')
@@ -491,14 +502,16 @@ describe('user-install', () => {
   describe('default profile', () => {
     // One row per default-profile tool, run on the bare-exec surface. The
     // expected shapes stay loose: versions float with nixpkgs-unstable by
-    // design (ADR 0003). quarkus and shfmt print a bare semver; the yq row
-    // asserts the Go implementation (the nixpkgs yq-go rename gotcha); the
-    // compose row pins the CLI plugin nixpkgs' docker-client bundles
-    // (composeSupport) — the workspace speaks `docker compose` out of the
-    // box, not just the bare CLI.
+    // design (ADR 0003). quarkus prints a bare semver; the gradle row pins
+    // the 9 line (the bundle names gradle_9 explicitly, since the pinned
+    // registry carries both majors side by side); the yq row asserts the Go
+    // implementation (the nixpkgs yq-go rename gotcha); the compose row pins
+    // the CLI plugin nixpkgs' docker-client bundles (composeSupport) — the
+    // workspace speaks `docker compose` out of the box, not just the bare
+    // CLI.
     test.each([
       ['java --version', /GraalVM CE/],
-      ['gradle --version', /Gradle \d+\.\d+/],
+      ['gradle --version', /Gradle 9\.\d+/],
       ['kotlin -version 2>&1', /Kotlin version \d+\.\d+/],
       ['mvn --version', /Apache Maven \d+\.\d+/],
       ['quarkus --version', /^\d+\.\d+\.\d+$/],
@@ -511,9 +524,10 @@ describe('user-install', () => {
       ['bun --version', /^\d+\.\d+/],
       ['gh --version', /^gh version \d+/],
       ['git --version', /^git version \d+\.\d+/],
+      ['glab --version', /^glab \d+\.\d+/],
+      ['grpcurl --version 2>&1', /^grpcurl \d+\.\d+/],
       ['yq --version', /mikefarah/],
       ['shellcheck --version', /version: \d+\.\d+/],
-      ['shfmt --version', /^\d+\.\d+\.\d+$/],
       ['docker --version', /^Docker version \d+/],
       ['docker compose version', /Docker Compose version v?\d+\.\d+/],
       ['fnm --version', /^fnm \d+/],
@@ -522,6 +536,8 @@ describe('user-install', () => {
       ['rsync --version', /^rsync\s+version \d+/],
       ['tmux -V', /^tmux \d+/],
       ['jq --version', /^jq-\d+\.\d+/],
+      ['less --version', /^less \d+/],
+      ['man --version', /^man \d+\.\d+/],
     ])(
       '%s runs',
       async (command, expected) => {
@@ -534,11 +550,14 @@ describe('user-install', () => {
   describe('carve-outs', () => {
     // Outside the read-only store, on ~/.local/bin (PATH hook #1 covers
     // it): uv by its official installer, the agent CLIs by their vendor
-    // scripts (they rewrite their own binary).
+    // scripts (they rewrite their own binary), the TWG CLI by Atlassian's
+    // installer (its built-in upgrader rewrites the binary, which a store
+    // path forbids).
     test.each([
       ['uv --version', /^uv \d+/],
       ['claude --version', /Claude Code/],
       ['opencode --version', /^\d+\.\d+\.\d+$/],
+      ['twg --version', /^\d+\.\d+\.\d+$/],
     ])(
       '%s runs outside the store',
       async (command, expected) => {
@@ -547,15 +566,19 @@ describe('user-install', () => {
       120_000,
     )
 
+    test('twg resolves in ~/.local/bin on a fresh boot', async () => {
+      expect(await execBare('command -v twg')).toBe('/nix/ubuntu/.local/bin/twg')
+    }, 60_000)
+
     test("node resolves in an interactive shell with fnm's LTS default", async () => {
       expect(await execInteractive('node --version')).toMatch(/^v\d+\.\d+\.\d+/)
     }, 120_000)
 
     test('fnm, node, profile tools and the carve-outs coexist in one shell', async () => {
       // command -v exits non-zero when any named command is missing, so
-      // resolving all six at once is the check — one shell carrying the
+      // resolving all seven at once is the check — one shell carrying the
       // Nix profile, fnm's Node, and the store-outside carve-outs.
-      expect((await execInteractive('command -v node java fnm uv claude opencode')).split('\n')).toHaveLength(6)
+      expect((await execInteractive('command -v node java fnm uv claude opencode twg')).split('\n')).toHaveLength(7)
     }, 120_000)
 
     test('node stays interactive-only, as nvm was', async () => {
@@ -637,6 +660,28 @@ describe('user-install', () => {
       expect(await sshCommand('bash -c "printenv UV_PYTHON"')).toBe('3.14')
     }, 60_000)
 
+    // The tools this refresh added to the linux bundle, on both real SSH
+    // surfaces: the login shell (the Env loader through /etc/profile.d)
+    // resolves them, and the bare ssh command (the loader at the top of
+    // /etc/bash.bashrc) runs them. grpcurl prints its version on stderr, so
+    // the remote script merges the streams before matching.
+    test.each(['glab', 'grpcurl'])(
+      '%s resolves and runs on the SSH surfaces',
+      async (command) => {
+        expect(await sshLogin(`command -v ${command}`)).toBe(`/nix/ubuntu/.nix-profile/bin/${command}`)
+        expect(await sshCommand(`${command} --version 2>&1`)).toMatch(new RegExp(`^${command} \\d+\\.\\d+`))
+      },
+      60_000,
+    )
+
+    // The linux bundle's vendor carve-out rides every PATH hook too: the
+    // login shell reaches it through /etc/profile.d, the bare ssh command
+    // through the loader at the top of /etc/bash.bashrc.
+    test('the linux bundle carve-out resolves on the SSH surfaces', async () => {
+      expect(await sshLogin('command -v twg')).toBe('/nix/ubuntu/.local/bin/twg')
+      expect(await sshCommand('twg --version')).toMatch(/^\d+\.\d+\.\d+$/)
+    }, 60_000)
+
     // The socket-group regression: compose's group_add grants the docker
     // socket's GID only to the container's process tree, but sshd rebuilds
     // each session's groups from /etc/group — the entrypoint must
@@ -644,6 +689,103 @@ describe('user-install', () => {
     // call from an SSH shell dies on EACCES at the socket.
     test('a login shell carries the docker socket group', async () => {
       expect((await sshLogin('id --groups')).split(/\s+/)).toContain(env.DOCKER_GID)
+    }, 60_000)
+
+    // The interactive-only carve-out wiring over the real sshd: fnm's eval
+    // lives in ~/.bashrc's interactive region, which only an interactive
+    // session reaches — a plain login or command session stops at the
+    // non-interactive guards, so node resolving here proves the activation
+    // came from that region and not from any PATH hook. The resolved path
+    // carries fnm's fingerprint (the multishell directory its eval prepends
+    // to PATH), and the version line proves the binary runs.
+    test('a forced-pty session activates fnm and resolves node', async () => {
+      const output = await sshInteractive('command -v node && node --version')
+      expect(output).toMatch(/^\/nix\/ubuntu\/\S*fnm\S*\/bin\/node$/m)
+      expect(output).toMatch(/^v\d+\.\d+\.\d+/m)
+    }, 60_000)
+  })
+
+  // Git's external runtime dependencies: git shells out for its pager
+  // (less by default), its editor (resolved through the EDITOR chain) and
+  // its man reader (the man program), so the profile carries less and
+  // man-db and the Env loader exports MANPATH and EDITOR=nano. The SSH
+  // surfaces are where it pays off — sshd builds every session's
+  // environment from scratch, so a resolved editor or manpath there can
+  // only come from the loader.
+  describe('git runtime dependencies', () => {
+    test('git branch pages through less on a TTY surface', async () => {
+      // script re-attaches the command to a fresh pty — the only way a
+      // docker-exec surface becomes a TTY, which is the condition git
+      // pages under. util-linux script has no long form for the typescript
+      // file argument, and TERM is set explicitly because docker exec
+      // carries none and less needs terminfo. git exports LESS=FRX into
+      // the pager, so less quits by itself once the output fits one
+      // screen and the pty never waits on input.
+      const output = await execBare(`set -e
+        work="$(mktemp --directory)"
+        cd "$work"
+        git init --quiet
+        git config user.name 'Test User'
+        git config user.email 'test@example.com'
+        git commit --allow-empty --quiet --message init
+        git branch side-branch
+        env TERM=xterm script --quiet --command 'git branch' /dev/null
+      `)
+      expect(output).toContain('side-branch')
+      expect(output).not.toContain('cannot run')
+    }, 60_000)
+
+    test('git help git renders a man page', async () => {
+      // git execs man with its own man directory prepended to MANPATH, so
+      // the rendered GIT(1) title is the man reader working end to end;
+      // bare man output is plain text on a non-TTY stdout.
+      expect(await execBare('git help git | head --lines=1')).toMatch(/^GIT\(1\)/)
+    }, 60_000)
+
+    test('the Env loader exports MANPATH on every shell surface', async () => {
+      // Every component of MANPATH is the profile's man directory. Login
+      // shells see it twice: ~/.profile sources the Nix profile's own
+      // nix.sh hook, which prepends the same directory without a duplicate
+      // check — a wart of the installer's script — and man searches each
+      // entry in turn, so the duplicate never changes what it finds.
+      const assertProfileManpath = (value: string) =>
+        expect(new Set(value.split(':').filter((entry) => entry !== ''))).toEqual(
+          new Set(['/nix/ubuntu/.nix-profile/share/man']),
+        )
+      assertProfileManpath(await sshLogin('printenv MANPATH'))
+      assertProfileManpath(await sshCommand('printenv MANPATH'))
+      assertProfileManpath(await execInteractive('printenv MANPATH'))
+    }, 60_000)
+
+    test('a bare man finds the profile man pages', async () => {
+      // --where resolves the page's location without formatting it: the
+      // profile's man hierarchy is where the default profile's pages land.
+      expect(await sshCommand('man --where git-config')).toMatch(/\/share\/man\/man1\/git-config\.1/)
+    }, 60_000)
+
+    test('git resolves nano as its editor', async () => {
+      // git var GIT_EDITOR prints the exact editor the GIT_EDITOR →
+      // core.editor → VISUAL → EDITOR → vi chain lands on.
+      expect(await sshLogin('git var GIT_EDITOR')).toBe('nano')
+      expect(await sshCommand('git var GIT_EDITOR')).toBe('nano')
+    }, 60_000)
+
+    test('a commit message with nothing set reaches nano and comes back', async () => {
+      // The end-to-end path: an SSH session (environment built by sshd from
+      // scratch, so EDITOR can only be the loader's) runs git commit under
+      // a pty, nano really opens COMMIT_EDITMSG, and Ctrl+X (printf's \x18
+      // — printf has no long form for format escapes; the byte exits an
+      // unmodified buffer without saving) brings it back so git aborts on
+      // the empty message. A missing or unwired editor would instead die
+      // with "unable to start editor" and never print the abort line.
+      const output = await sshCommand(`cd "$(mktemp --directory)"
+        git init --quiet
+        git config user.name 'Test User'
+        git config user.email 'test@example.com'
+        printf '\\x18' | env TERM=xterm script --quiet --command 'git commit --allow-empty' /dev/null || true
+      `)
+      expect(output).toContain('Aborting commit due to empty commit message')
+      expect(output).not.toContain('unable to start editor')
     }, 60_000)
   })
 
@@ -707,7 +849,7 @@ describe('user-install', () => {
       // …every default-profile tool and carve-out still resolves, one
       // command per name (node stays interactive-only, as ever)…
       const tools =
-        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git yq shellcheck shfmt docker fnm ffmpeg rg rsync tmux jq uv claude opencode'.split(
+        'java gradle kotlin mvn quarkus scala rustup cargo go php composer bun gh git glab grpcurl yq shellcheck docker fnm ffmpeg rg rsync tmux jq uv claude opencode twg'.split(
           ' ',
         )
       const paths = (await execBare(`command -v ${tools.join(' ')}`)).split('\n')

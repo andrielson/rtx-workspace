@@ -130,6 +130,57 @@ describe('user-install', () => {
     })
   })
 
+  // The TWG CLI rides the always-on linux bundle as its vendor carve-out:
+  // no skip gate (linux has no skip variable), and the install must stay
+  // unattended — first boot runs with no tty. The installer line therefore
+  // goes through the shared wrapper, carries consent (--yes), skips the
+  // OAuth login (it reads /dev/tty) and skips the agent-skills writes
+  // (their harness homes belong to skippable bundles), landing the binary
+  // in ~/.local/bin where its built-in upgrader can rewrite it.
+  describe('twg installer', () => {
+    const installer = liftHelper('install_twg')
+    const bundles = liftHelper('install_bundles')
+
+    test('fetches the documented installer through the shared wrapper, unattended', () => {
+      expect(installer, 'install_twg not found in user-install.sh — renamed?').not.toBe('')
+      expect(installer).toContain('_curl https://teamwork-graph.atlassian.com/cli/install | bash -s --')
+      expect(installer).toContain('--yes')
+      expect(installer).toContain('--skip-login')
+      expect(installer).toContain('--skip-skills')
+      expect(installer).not.toContain('--version')
+    })
+
+    test('runs among the linux setup steps, after the SSH setup and before the vendor bundles', () => {
+      const sshIndex = bundles.indexOf('setup_ssh')
+      const twgIndex = bundles.indexOf('install_twg')
+      const firstVendorBundle = bundles.indexOf('run_bundle PYTHON')
+      expect(sshIndex).toBeGreaterThanOrEqual(0)
+      expect(twgIndex).toBeGreaterThan(sshIndex)
+      expect(firstVendorBundle).toBeGreaterThan(twgIndex)
+    })
+  })
+
+  // Git resolves its pager and its man reader from PATH — no config can
+  // substitute for the binaries — so both must ride the always-on union.
+  // The block is lifted as the bare packages+=(...) array, never a
+  // bundle_packages() call: a dependency landing behind a skip variable
+  // would vanish from volumes provisioned with that bundle skipped.
+  describe('linux bundle', () => {
+    // Anchored on nixpkgs#-only entry lines, so the bundle_packages
+    // helper's packages+=("${@}") never matches.
+    const alwaysOnPackages = script.match(/packages\+=\(\n((?:\s+nixpkgs#[^\n]+)+)\n\s*\)/)?.[1] ?? ''
+
+    test('package union is found in the Bootstrap script', () => {
+      expect(alwaysOnPackages, 'the linux bundle packages block not found in user-install.sh — restructured?').not.toBe(
+        '',
+      )
+    })
+
+    test.each(['nixpkgs#less', 'nixpkgs#man-db'])('%s is in the always-on union', (pkg) => {
+      expect(alwaysOnPackages).toContain(pkg)
+    })
+  })
+
   // The gate decides every bundle's participation; its contract mirrors the
   // entrypoint's global SKIP_USER_INSTALL kill-switch (exactly '1' skips,
   // anything else — '0', empty, unset — runs). DEMO is a throwaway bundle

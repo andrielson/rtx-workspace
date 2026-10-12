@@ -37,7 +37,7 @@ The Nix profile the Bootstrap script installs in one unattended `nix profile add
 _Avoid_: tool set, package list
 
 **Carve-outs**:
-The tools deliberately installed outside the read-only Nix store, each through its bundle's vendor step: uv and the Python it manages (`python`) through uv's official installer, the self-updating agent CLIs (`claude`, `opencode`) through their vendor scripts, Node through fnm — interactive-only, as nvm was (`node`) — and Bun and Rust through their vendor installers (`bun`, `rust` — bun.sh and rustup both move faster than a pinned profile and self-update).
+The tools deliberately installed outside the read-only Nix store, each through its bundle's vendor step: uv and the Python it manages (`python`) through uv's official installer, the self-updating agent CLIs (`claude`, `opencode`) through their vendor scripts, the Atlassian TWG CLI (`twg`) through Atlassian's installer — riding the always-on `linux` bundle, so gated by no skip variable — Node through fnm — interactive-only, as nvm was (`node`) — and Bun and Rust through their vendor installers (`bun`, `rust` — bun.sh and rustup both move faster than a pinned profile and self-update).
 _Avoid_: exceptions, manual installs
 
 **Image contract**:
